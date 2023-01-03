@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 )
 
 var Debug = false
@@ -26,6 +27,25 @@ func absBaseURL(manifestBaseURL *url.URL, elBaseURL string) *url.URL {
 		return u
 	}
 	return manifestBaseURL.ResolveReference(u)
+}
+
+func extractContentType(contentType, mimeType *string) string {
+	if contentType != nil {
+		return strings.ToLower(*contentType)
+	}
+	if mimeType != nil {
+		mType := strings.ToLower(*mimeType)
+		if strings.Contains(mType, "video") {
+			return "video"
+		}
+		if strings.Contains(mType, "audio") {
+			return "audio"
+		}
+		if strings.Contains(mType, "text") {
+			return "text"
+		}
+	}
+	return UnknownString
 }
 
 // downloadFile downloads a file from a given url and saves it to a given path

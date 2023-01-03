@@ -8,8 +8,8 @@ import (
 	"github.com/zencoder/go-dash/mpd"
 )
 
-func debugPrintAdaptationSet(as *mpd.AdaptationSet) {
-	fmt.Printf(">> AdaptationSet ID: %s ContentType: %s", strPtrtoS(as.ID), strPtrtoS(as.ContentType))
+func debugPrintAdaptationSet(contentType string, as *mpd.AdaptationSet) {
+	fmt.Printf(">> AdaptationSet ID: %s ContentType: %s", strPtrtoS(as.ID), contentType)
 	if as.MimeType != nil {
 		fmt.Printf(" MimeType: %s", strPtrtoS(as.MimeType))
 	}
@@ -39,10 +39,14 @@ func debugPrintAdaptationSet(as *mpd.AdaptationSet) {
 	for _, role := range as.Roles {
 		fmt.Printf("  Role: %s\n", strPtrtoS(role.Value))
 	}
+	fmt.Printf("  # of representations: %d\n", len(as.Representations))
 }
 
 func debugPrintRepresentation(baseURL *url.URL, contentType string, r *mpd.Representation) {
 	fmt.Printf("\tRepresentation ID: %s\n", strPtrtoS(r.ID))
+	if r.MimeType != nil {
+		fmt.Printf("\tMimeType: %s\n", strPtrtoS(r.MimeType))
+	}
 	if r.BaseURL != nil {
 		tmpBaseURL := absBaseURL(baseURL, *r.BaseURL)
 		fmt.Println("\tBaseURL:", tmpBaseURL)
@@ -58,6 +62,11 @@ func debugPrintRepresentation(baseURL *url.URL, contentType string, r *mpd.Repre
 				fmt.Printf("\tSegmentBase Initialization range: %s\n", strPtrtoS(r.SegmentBase.Initialization.Range))
 			}
 		}
+	}
+
+	if contentType == UnknownString {
+		contentType = extractContentType(nil, r.MimeType)
+		fmt.Printf("\tContentType: %s\n", contentType)
 	}
 
 	switch contentType {

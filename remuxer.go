@@ -41,6 +41,10 @@ func Mux(outFilePath string, audioTracks []*AudioTrack) error {
 		}
 	}
 
+	if trackNbr == 0 {
+		return fmt.Errorf("No tracks found, nothing to mux")
+	}
+
 	for i := 0; i < trackNbr; i++ {
 		args = append(args, "-map", fmt.Sprintf("%d", i))
 	}

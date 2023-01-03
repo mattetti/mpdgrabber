@@ -15,11 +15,12 @@ const (
 	// baseURL simple audio only example
 	audioOnlyManifest     = "https://dash.akamaized.net/dash264/TestCases/3a/fraunhofer/heaac_stereo_without_video/ElephantsDream/elephants_dream_audio_only_heaac_stereo_sidx.mpd"
 	audioAndVideoManifest = "https://storage.googleapis.com/shaka-demo-assets/angel-one/dash.mpd"
+	templatedManifest     = "https://dash.akamaized.net/dash264/TestCasesIOP33/adapatationSetSwitching/5/manifest.mpd"
 )
 
 var (
 	debugFlag      = flag.Bool("debug", true, "Set debug mode")
-	URLFlag        = flag.String("url", audioAndVideoManifest, "URL of the mpeg-dash manifest to backup.")
+	URLFlag        = flag.String("url", templatedManifest, "URL of the mpeg-dash manifest to backup.")
 	outputFileName = flag.String("output", "downloaded_video", "The name of the output file without the extension.")
 	audioOnlyFlag  = flag.Bool("audio-only", false, "Download only the audio tracks.")
 	videoOnlyFlag  = flag.Bool("video-only", false, "Download only the video tracks.")

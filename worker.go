@@ -212,7 +212,13 @@ func (w *Worker) downloadManifest(job *WJob) {
 		}
 
 		for _, adaptationSet := range period.AdaptationSets {
-			contentType := strPtrtoS(adaptationSet.ContentType)
+			contentType := extractContentType(adaptationSet.ContentType, adaptationSet.MimeType)
+			if contentType == UnknownString {
+				availableTypes := representationTypes(adaptationSet.Representations)
+				if len(availableTypes) == 1 {
+					contentType = availableTypes[0]
+				}
+			}
 
 			if shouldSkipLang(strPtrtoS(adaptationSet.Lang)) {
 				if Debug {
@@ -238,7 +244,7 @@ func (w *Worker) downloadManifest(job *WJob) {
 			}
 
 			if Debug {
-				debugPrintAdaptationSet(adaptationSet)
+				debugPrintAdaptationSet(contentType, adaptationSet)
 			}
 
 			r := highestRepresentation(contentType, adaptationSet.Representations)
@@ -326,10 +332,32 @@ func (w *Worker) downloadAudioSegment(job *WJob) {
 	job.Err = err
 }
 
+func representationTypes(representations []*mpd.Representation) []string {
+	typesMap := map[string]bool{}
+	for _, r := range representations {
+		typesMap[extractContentType(nil, r.MimeType)] = true
+	}
+	t := make([]string, 0, len(typesMap))
+	for k := range typesMap {
+		t = append(t, k)
+	}
+	return t
+}
+
 func highestRepresentation(contentType string, representations []*mpd.Representation) *mpd.Representation {
 	var highestBandwidth int64
 	var highestWidth int64
 	var highestRep *mpd.Representation
+
+	if contentType == UnknownString {
+		availableTypes := representationTypes(representations)
+		if len(availableTypes) == 1 {
+			contentType = availableTypes[0]
+		} else {
+			Logger.Printf("multiple content types found: %s", strings.Join(availableTypes, ", "))
+			return nil
+		}
+	}
 
 	// Video
 	if strings.ToLower(contentType) == "video" {

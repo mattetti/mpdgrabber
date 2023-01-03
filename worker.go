@@ -97,7 +97,7 @@ func (w *Worker) Work() {
 	}
 
 	if Debug {
-		fmt.Printf("-> Worker %d is out", w.id)
+		fmt.Printf("-> Worker %d is out\n", w.id)
 	}
 }
 
@@ -181,7 +181,7 @@ func (w *Worker) downloadManifest(job *WJob) {
 		return
 	}
 
-	audioFiles := []string{}
+	audioTracks := []*AudioTrack{}
 	// videoFiles := []string{}
 	// textFiles := []string{}
 
@@ -216,7 +216,7 @@ func (w *Worker) downloadManifest(job *WJob) {
 
 			if shouldSkipLang(strPtrtoS(adaptationSet.Lang)) {
 				if Debug {
-					fmt.Printf("Skipping adaptation %s, [%s] because Lang: %s {allowed: %s}\n",
+					fmt.Printf("-> Skipping adaptation %s, [%s] because Lang: %s {allowed: %s}\n",
 						strPtrtoS(adaptationSet.ID),
 						contentType,
 						strPtrtoS(adaptationSet.Lang),
@@ -272,7 +272,16 @@ func (w *Worker) downloadManifest(job *WJob) {
 						wg:           job.wg,
 					}
 					segChan <- job
-					audioFiles = append(audioFiles, path)
+
+					at := &AudioTrack{
+						RepresentationID: strPtrtoS(r.ID),
+						BaseURL:          tmpBaseURL.String(),
+						Language:         strPtrtoS(adaptationSet.Lang),
+						AbsolutePath:     path,
+						Codec:            strPtrtoS(r.Codecs),
+						SampleRate:       int64PtrToI(r.AudioSamplingRate),
+					}
+					audioTracks = append(audioTracks, at)
 				} else {
 					// TODO: support segment list and template
 					Logger.Printf("audio is not segment base, AS ID: %s, Rep ID: %s", strPtrtoS(adaptationSet.ID), strPtrtoS(r.ID))
@@ -284,6 +293,13 @@ func (w *Worker) downloadManifest(job *WJob) {
 			}
 
 		}
+	}
+
+	outputPath := filepath.Join(job.DestPath, job.Filename) + ".mkv"
+	err = Mux(outputPath, audioTracks)
+	if err != nil {
+		Logger.Println("Failed to mux audio tracks:", err)
+		os.Exit(1)
 	}
 
 }
@@ -445,4 +461,13 @@ func allowedContentTypes() []string {
 // Close closes the open channels to stop the workers cleanly
 func Close() {
 	close(DlChan)
+}
+
+type AudioTrack struct {
+	RepresentationID string
+	BaseURL          string // optional
+	Language         string
+	Codec            string
+	SampleRate       int
+	AbsolutePath     string
 }

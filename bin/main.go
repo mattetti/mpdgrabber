@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 	"sync"
@@ -67,12 +68,18 @@ func main() {
 	stopChan := make(chan bool)
 	mpdgrabber.LaunchWorkers(wg, stopChan)
 
-	if err := mpdgrabber.DownloadFromMPDFile(*URLFlag, *outputFileName); err != nil {
+	pathToUse, err := os.Getwd()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if err := mpdgrabber.DownloadFromMPDFile(*URLFlag, pathToUse, *outputFileName); err != nil {
 		mpdgrabber.Logger.Printf("Failed to download the mpd file: %s", err)
 		os.Exit(1)
 	}
 
 	mpdgrabber.Close()
+	fmt.Println("Waiting for workers to finish!")
 	wg.Wait()
 }
 

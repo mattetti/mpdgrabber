@@ -32,6 +32,15 @@ func absBaseURL(manifestBaseURL *url.URL, elBaseURL string) *url.URL {
 // it returns the file and an error if something goes wrong
 // It's the caller's responsibility to close the file.
 func downloadFile(url string, path string) (*os.File, error) {
+
+	// check if there is a valid file at `path`
+	if fileExists(path) {
+		if Debug {
+			fmt.Println("-> File already exists at", path)
+		}
+		return os.Open(path)
+	}
+
 	// Create the file
 	out, err := os.Create(path)
 	if err != nil {
@@ -43,7 +52,7 @@ func downloadFile(url string, path string) (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Add("Accept", "application/dash+xml,video/vnd.mpeg.dash.mpd")
+	// req.Header.Add("Accept", "application/dash+xml,video/vnd.mpeg.dash.mpd")
 
 	// call the request
 	resp, err := http.DefaultClient.Do(req)
@@ -64,6 +73,11 @@ func downloadFile(url string, path string) (*os.File, error) {
 	}
 
 	return out, nil
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return !os.IsNotExist(err)
 }
 
 func strPtrtoS(s *string) string {

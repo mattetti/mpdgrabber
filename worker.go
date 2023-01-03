@@ -96,19 +96,25 @@ func (w *Worker) Work() {
 		}
 	}
 
-	Logger.Printf("worker %d is out", w.id)
+	if Debug {
+		fmt.Printf("-> Worker %d is out", w.id)
+	}
 }
 
 func (w *Worker) dispatch(job *WJob) {
 	switch job.Type {
-	// case ListDL:
-	// 	// w. TODO (job)
+	case ManifestDL:
+		w.downloadManifest(job)
 	// case VideoDL:
 	// 	w.downloadVideo(job)
 	// case TextDL:
 	// 	w.downloadText(job)
-	// case AudioDL:
-	// 	w.downloadAudio(job)
+	case AudioSegmentDL:
+		job.wg.Add(1)
+		if Debug {
+			fmt.Println("-> Worker", w.id, "downloading audio segment", job.URL, "to", job.AbsolutePath)
+		}
+		w.downloadAudioSegment(job)
 	default:
 		Logger.Printf("format: %v not supported by workers\n", job.Type)
 		return
@@ -116,20 +122,49 @@ func (w *Worker) dispatch(job *WJob) {
 
 }
 
-func DownloadFromMPDFile(manifestURL, destPath string) error {
+func DownloadFromMPDFile(manifestURL, pathToUse, outFilename string) error {
+	wg := &sync.WaitGroup{}
+	job := &WJob{
+		Type:     ManifestDL,
+		URL:      manifestURL,
+		DestPath: pathToUse,
+		Filename: outFilename,
+		wg:       wg,
+	}
+	wg.Add(1)
+	DlChan <- job
+	wg.Wait()
 
+	return job.Err
+}
+
+func (w *Worker) downloadManifest(job *WJob) {
+	if Debug {
+		fmt.Println("-> Downloading the manifest file", job.URL)
+	}
 	manifestPath := filepath.Join(TmpFolder, "manifest.mpd")
-	mpdF, err := downloadFile(manifestURL, manifestPath)
+	mpdF, err := downloadFile(job.URL, manifestPath)
 	if err != nil {
 		Logger.Println("failed to download the manifest file")
 		Logger.Println(err)
-		return err
+		job.Err = err
+		return
 	}
 
 	defer func() {
 		mpdF.Close()
 		os.Remove(manifestPath)
+		if job.wg != nil {
+			job.wg.Done()
+			if Debug {
+				fmt.Println("-> done with the download manifest job")
+			}
+		}
 	}()
+
+	if Debug {
+		fmt.Println("-> Parsing the manifest file", manifestPath)
+	}
 
 	// rewind the file
 	mpdF.Seek(0, io.SeekStart)
@@ -137,33 +172,41 @@ func DownloadFromMPDFile(manifestURL, destPath string) error {
 	// parse the manifest
 	mpdData, err := mpd.Read(mpdF)
 	if err != nil {
-		return fmt.Errorf("Failed to read the mpd file - %s\n", err)
+		job.Err = fmt.Errorf("Failed to read the mpd file - %s\n", err)
+		return
 	}
 
 	if mpdData.Type != nil && (*mpdData.Type == "dynamic") {
-		return fmt.Errorf("dynamic mpd not supported")
+		job.Err = fmt.Errorf("dynamic mpd not supported")
+		return
 	}
 
-	maniURL, _ := url.Parse(manifestURL)
+	audioFiles := []string{}
+	// videoFiles := []string{}
+	// textFiles := []string{}
 
+	maniURL, _ := url.Parse(job.URL)
 	var baseURL *url.URL
+
 	if mpdData.BaseURL == "" {
 		baseURL = maniURL
 	} else {
 		baseURL = absBaseURL(maniURL, mpdData.BaseURL)
-		fmt.Println("Base URL", baseURL.String())
+		if Debug {
+			fmt.Println("-> Base URL", baseURL.String())
+		}
 	}
 
 	tmpBaseURL := baseURL
 	for _, period := range mpdData.Periods {
 		if Debug {
-			fmt.Printf("Period ID: %s, duration: %s\n", period.ID, time.Duration(period.Duration).String())
+			fmt.Printf("-> Period ID: %s, duration: %s\n", period.ID, time.Duration(period.Duration).String())
 		}
 
 		if period.BaseURL != "" {
 			tmpBaseURL = absBaseURL(tmpBaseURL, period.BaseURL)
 			if Debug {
-				fmt.Printf(" Base URL:%s", tmpBaseURL.String())
+				fmt.Printf("-> Base URL:%s", tmpBaseURL.String())
 				fmt.Println()
 			}
 		}
@@ -172,23 +215,26 @@ func DownloadFromMPDFile(manifestURL, destPath string) error {
 			contentType := strPtrtoS(adaptationSet.ContentType)
 
 			if shouldSkipLang(strPtrtoS(adaptationSet.Lang)) {
+				if Debug {
+					fmt.Printf("Skipping adaptation %s, [%s] because Lang: %s {allowed: %s}\n",
+						strPtrtoS(adaptationSet.ID),
+						contentType,
+						strPtrtoS(adaptationSet.Lang),
+						strings.Join(LangFilter, ","),
+					)
+				}
 				continue
 			}
 
-			// filter content types based on download flags
-			switch contentType {
-			case "video":
-				if !VideoDownloadEnabled {
-					continue
+			if shouldSkipContentType(contentType) {
+				if Debug {
+					fmt.Printf("-> Skipping adaptation %s, [%s] because content type filtering {allowed: %s}\n",
+						strPtrtoS(adaptationSet.ID),
+						contentType,
+						strings.Join(allowedContentTypes(), ","),
+					)
 				}
-			case "audio":
-				if !AudioDownloadEnabled {
-					continue
-				}
-			case "text":
-				if !TextDownloadEnabled {
-					continue
-				}
+				continue
 			}
 
 			if Debug {
@@ -207,18 +253,26 @@ func DownloadFromMPDFile(manifestURL, destPath string) error {
 				continue
 			}
 
+			if r.BaseURL != nil {
+				tmpBaseURL = absBaseURL(tmpBaseURL, *r.BaseURL)
+			}
+
 			switch contentType {
 			case "video":
 
 			case "audio":
 				if isSegmentBase(r) {
+					audioFilename := filepath.Base(tmpBaseURL.Path)
+					path := filepath.Join(job.DestPath, audioFilename)
 					job := &WJob{
-						Type:     AudioSegmentDL,
-						URL:      tmpBaseURL.String(),
-						DestPath: "",
-						Filename: "",
+						Type:         AudioSegmentDL,
+						URL:          tmpBaseURL.String(),
+						AbsolutePath: path,
+						Filename:     audioFilename,
+						wg:           job.wg,
 					}
-					DlChan <- job
+					segChan <- job
+					audioFiles = append(audioFiles, path)
 				} else {
 					// TODO: support segment list and template
 					Logger.Printf("audio is not segment base, AS ID: %s, Rep ID: %s", strPtrtoS(adaptationSet.ID), strPtrtoS(r.ID))
@@ -232,8 +286,28 @@ func DownloadFromMPDFile(manifestURL, destPath string) error {
 		}
 	}
 
-	return nil
+}
 
+func (w *Worker) downloadAudioSegment(job *WJob) {
+	if Debug {
+		fmt.Println("-> Downloading audio segment:", job.URL, "to", job.AbsolutePath)
+	}
+	defer func() {
+		if job.wg != nil {
+			job.wg.Done()
+		}
+	}()
+
+	audioF, err := downloadFile(job.URL, job.AbsolutePath)
+	if err != nil {
+		Logger.Println("Failed to download the audio segment file")
+		Logger.Println(err)
+	}
+	if Debug {
+		fmt.Println("-> done with the download audio segment job", job.AbsolutePath)
+	}
+	audioF.Close()
+	job.Err = err
 }
 
 func highestRepresentation(contentType string, representations []*mpd.Representation) *mpd.Representation {
@@ -333,6 +407,39 @@ func shouldSkipLang(lang string) bool {
 	}
 
 	return true
+}
+
+func shouldSkipContentType(contentType string) bool {
+	// filter content types based on download flags
+	switch contentType {
+	case "video":
+		if !VideoDownloadEnabled {
+			return true
+		}
+	case "audio":
+		if !AudioDownloadEnabled {
+			return true
+		}
+	case "text":
+		if !TextDownloadEnabled {
+			return true
+		}
+	}
+	return false
+}
+
+func allowedContentTypes() []string {
+	var allowed []string
+	if VideoDownloadEnabled {
+		allowed = append(allowed, "video")
+	}
+	if AudioDownloadEnabled {
+		allowed = append(allowed, "audio")
+	}
+	if TextDownloadEnabled {
+		allowed = append(allowed, "text")
+	}
+	return allowed
 }
 
 // Close closes the open channels to stop the workers cleanly

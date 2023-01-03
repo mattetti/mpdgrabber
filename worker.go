@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/zencoder/go-dash/mpd"
+	"github.com/mattetti/go-dash/mpd"
 )
 
 var (
@@ -180,6 +180,10 @@ func (w *Worker) downloadManifest(job *WJob) {
 		job.Err = fmt.Errorf("dynamic mpd not supported")
 		return
 	}
+	if Debug {
+		fmt.Println("-> MPD file parsed")
+		// FIXME: max segment duration is missing
+	}
 
 	audioTracks := []*AudioTrack{}
 	// videoFiles := []string{}
@@ -188,7 +192,7 @@ func (w *Worker) downloadManifest(job *WJob) {
 	maniURL, _ := url.Parse(job.URL)
 	var baseURL *url.URL
 
-	if mpdData.BaseURL == "" {
+	if len(mpdData.BaseURL) == 0 {
 		baseURL = maniURL
 	} else {
 		baseURL = absBaseURL(maniURL, mpdData.BaseURL)
@@ -203,7 +207,7 @@ func (w *Worker) downloadManifest(job *WJob) {
 			fmt.Printf("-> Period ID: %s, duration: %s\n", period.ID, time.Duration(period.Duration).String())
 		}
 
-		if period.BaseURL != "" {
+		if len(period.BaseURL) > 0 {
 			tmpBaseURL = absBaseURL(tmpBaseURL, period.BaseURL)
 			if Debug {
 				fmt.Printf("-> Base URL:%s", tmpBaseURL.String())
@@ -219,6 +223,7 @@ func (w *Worker) downloadManifest(job *WJob) {
 					contentType = availableTypes[0]
 				}
 			}
+			setBaseURL := absBaseURL(tmpBaseURL, adaptationSet.BaseURL)
 
 			if shouldSkipLang(strPtrtoS(adaptationSet.Lang)) {
 				if Debug {
@@ -244,13 +249,13 @@ func (w *Worker) downloadManifest(job *WJob) {
 			}
 
 			if Debug {
-				debugPrintAdaptationSet(contentType, adaptationSet)
+				debugPrintAdaptationSet(setBaseURL, contentType, adaptationSet)
 			}
 
 			r := highestRepresentation(contentType, adaptationSet.Representations)
 			if Debug {
 				fmt.Println("\tBest representation:")
-				debugPrintRepresentation(tmpBaseURL, contentType, r)
+				debugPrintRepresentation(setBaseURL, contentType, r)
 				fmt.Println()
 			}
 
@@ -259,20 +264,18 @@ func (w *Worker) downloadManifest(job *WJob) {
 				continue
 			}
 
-			if r.BaseURL != nil {
-				tmpBaseURL = absBaseURL(tmpBaseURL, *r.BaseURL)
-			}
+			rBaseURL := absBaseURL(setBaseURL, r.BaseURL)
 
 			switch contentType {
 			case "video":
 
 			case "audio":
 				if isSegmentBase(r) {
-					audioFilename := filepath.Base(tmpBaseURL.Path)
+					audioFilename := filepath.Base(rBaseURL.Path)
 					path := filepath.Join(job.DestPath, audioFilename)
 					job := &WJob{
 						Type:         AudioSegmentDL,
-						URL:          tmpBaseURL.String(),
+						URL:          rBaseURL.String(),
 						AbsolutePath: path,
 						Filename:     audioFilename,
 						wg:           job.wg,
@@ -281,7 +284,7 @@ func (w *Worker) downloadManifest(job *WJob) {
 
 					at := &AudioTrack{
 						RepresentationID: strPtrtoS(r.ID),
-						BaseURL:          tmpBaseURL.String(),
+						BaseURL:          rBaseURL.String(),
 						Language:         strPtrtoS(adaptationSet.Lang),
 						AbsolutePath:     path,
 						Codec:            strPtrtoS(r.Codecs),

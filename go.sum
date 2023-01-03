@@ -1,2 +1,4 @@
-github.com/zencoder/go-dash v0.0.0-20201006100653-2f93b14912b2 h1:0iAY2pL6yYhNYpdc1DbFq0p7ocyu5MlgKmkealhz3nk=
-github.com/zencoder/go-dash v0.0.0-20201006100653-2f93b14912b2/go.mod h1:c8Gxxfmh0jmZ6G+ISlpa315WBVkzd8mEhu6gN9mn5Qg=
+github.com/mattetti/go-dash v0.0.0-20230103084621-c2498e421aea h1:UzchonqxLVHSyjLF+mIRAkPaBYeMaEsQCFFNu7uNmxM=
+github.com/mattetti/go-dash v0.0.0-20230103084621-c2498e421aea/go.mod h1:KcLVn8OMM/cQnv5MYNtDwgyKBXnn8BlLG2046elaB6s=
+github.com/zencoder/go-dash/v3 v3.0.3 h1:xqwGJ2fJCSArwONGx6sY26Z1lxQ7zTURoxdRjCpuodM=
+github.com/zencoder/go-dash/v3 v3.0.3/go.mod h1:30R5bKy1aUYY45yesjtZ9l8trNc2TwNqbS17WVQmCzk=

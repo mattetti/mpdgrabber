@@ -2,4 +2,6 @@ module github.com/mattetti/mpdgrabber
 
 go 1.18
 
-require github.com/zencoder/go-dash v0.0.0-20201006100653-2f93b14912b2 // indirect
+require github.com/mattetti/go-dash v0.0.0-20230103084621-c2498e421aea
+
+require github.com/zencoder/go-dash/v3 v3.0.3 // indirect

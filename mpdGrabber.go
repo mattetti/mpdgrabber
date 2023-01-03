@@ -15,7 +15,13 @@ var Logger = log.New(os.Stdout, "", log.Ldate|log.Ltime|log.Lshortfile)
 
 const UnknownString = "unknown"
 
-func absBaseURL(manifestBaseURL *url.URL, elBaseURL string) *url.URL {
+// always returns a copy
+func absBaseURL(manifestBaseURL *url.URL, elBaseURLs []string) *url.URL {
+	if len(elBaseURLs) == 0 {
+		u := *manifestBaseURL
+		return &u
+	}
+	elBaseURL := elBaseURLs[0]
 	u, err := url.Parse(elBaseURL)
 	if err != nil {
 		if Debug {
@@ -108,6 +114,13 @@ func strPtrtoS(s *string) string {
 }
 
 func int64PtrToI(d *int64) int {
+	if d == nil {
+		return 0
+	}
+	return int(*d)
+}
+
+func uint64PtrToI(d *uint64) int {
 	if d == nil {
 		return 0
 	}

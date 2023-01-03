@@ -3,12 +3,14 @@ package mpdgrabber
 import (
 	"fmt"
 	"log"
+	"math"
 	"net/url"
+	"strings"
 
-	"github.com/zencoder/go-dash/mpd"
+	"github.com/mattetti/go-dash/mpd"
 )
 
-func debugPrintAdaptationSet(contentType string, as *mpd.AdaptationSet) {
+func debugPrintAdaptationSet(baseURL *url.URL, contentType string, as *mpd.AdaptationSet) {
 	fmt.Printf(">> AdaptationSet ID: %s ContentType: %s", strPtrtoS(as.ID), contentType)
 	if as.MimeType != nil {
 		fmt.Printf(" MimeType: %s", strPtrtoS(as.MimeType))
@@ -17,6 +19,9 @@ func debugPrintAdaptationSet(contentType string, as *mpd.AdaptationSet) {
 		fmt.Printf(" Codecs: %s", strPtrtoS(as.Codecs))
 	}
 	fmt.Println()
+	if baseURL != nil {
+		fmt.Println("  BaseURL:", baseURL.String())
+	}
 	// print Group
 	if as.Group != nil {
 		fmt.Printf("  Group ID: %s\n", strPtrtoS(as.Group))
@@ -47,10 +52,10 @@ func debugPrintRepresentation(baseURL *url.URL, contentType string, r *mpd.Repre
 	if r.MimeType != nil {
 		fmt.Printf("\tMimeType: %s\n", strPtrtoS(r.MimeType))
 	}
-	if r.BaseURL != nil {
-		tmpBaseURL := absBaseURL(baseURL, *r.BaseURL)
-		fmt.Println("\tBaseURL:", tmpBaseURL)
-
+	rURL := absBaseURL(baseURL, nil)
+	if len(r.BaseURL) > 0 {
+		rURL = absBaseURL(rURL, r.BaseURL)
+		fmt.Println("\tBaseURL:", rURL.String())
 		if r.SegmentBase != nil {
 			fmt.Printf("\tSegmentBase Timescale: %d\n", uint32PtrToI(r.SegmentBase.Timescale))
 			// the Random Access Points (RAP) and other initialization information is contained in the index range.
@@ -62,6 +67,57 @@ func debugPrintRepresentation(baseURL *url.URL, contentType string, r *mpd.Repre
 				fmt.Printf("\tSegmentBase Initialization range: %s\n", strPtrtoS(r.SegmentBase.Initialization.Range))
 			}
 		}
+	}
+
+	if r.SegmentTemplate != nil {
+		// <SegmentTemplate timescale="48000" media="2second/tears_of_steel_1080p_audio_32k_dash_track1_$Number$.mp4" startNumber="1" duration="95232" initialization="2second/tears_of_steel_1080p_audio_32k_dash_track1_init.mp4"/>
+		if r.SegmentTemplate.Timescale != nil {
+			fmt.Printf("\tSegmentTemplate Timescale: %d\n", int64PtrToI(r.SegmentTemplate.Timescale))
+		}
+		if r.SegmentTemplate.Media != nil {
+			if strings.Contains(strPtrtoS(r.SegmentTemplate.Media), "$Number$") {
+				mediaStr := strPtrtoS(r.SegmentTemplate.Media)
+				fmt.Printf("\tSegmentTemplate number Media: %s\n", mediaStr)
+				duration := int64PtrToI(r.SegmentTemplate.Duration)
+				start := int64PtrToI(r.SegmentTemplate.StartNumber)
+				timescale := int64PtrToI(r.SegmentTemplate.Timescale)
+				// calculate the number of segments
+				// floor of duration / timescale
+				numberOfSegments := int(math.Ceil(float64(duration) / float64(timescale)))
+				// TODO: should be ~370 in the above example
+				fmt.Println("\t\tNumber of segments:", numberOfSegments)
+				numberOfSegments += start
+				for i := start; i < numberOfSegments; i++ {
+					// replace $Number$ with i in mediaStr
+					mediaURLStr := strings.Replace(mediaStr, "$Number$", fmt.Sprintf("%d", i), -1)
+					mediaURL := absBaseURL(rURL, []string{mediaURLStr})
+					fmt.Printf("\t\tSegmentTemplate number Media [%d]: %s\n", i, mediaURL.String())
+				}
+				// ceil value of numbnerOfSegments
+
+			} else {
+				fmt.Printf("\tSegmentTemplate Media: %s\n", strPtrtoS(r.SegmentTemplate.Media))
+			}
+		}
+		if r.SegmentTemplate.StartNumber != nil {
+			fmt.Printf("\tSegmentTemplate StartNumber: %d\n", int64PtrToI(r.SegmentTemplate.StartNumber))
+		}
+		if r.SegmentTemplate.Duration != nil {
+			fmt.Printf("\tSegmentTemplate Duration: %d\n", int64PtrToI(r.SegmentTemplate.Duration))
+		}
+		if r.SegmentTemplate.Timescale != nil {
+			fmt.Printf("\tSegmentTemplate Timescale: %d\n", int64PtrToI(r.SegmentTemplate.Timescale))
+		}
+		if r.SegmentTemplate.Initialization != nil {
+			fmt.Printf("\tSegmentTemplate Initialization: %s\n", strPtrtoS(r.SegmentTemplate.Initialization))
+		}
+		if r.SegmentTemplate.PresentationTimeOffset != nil {
+			fmt.Printf("\tSegmentTemplate PresentationTimeOffset: %d\n", uint64PtrToI(r.SegmentTemplate.PresentationTimeOffset))
+		}
+		if r.SegmentTemplate.SegmentTimeline != nil {
+			fmt.Printf("\tSegmentTemplate SegmentTimeline: %d\n", len(r.SegmentTemplate.SegmentTimeline.Segments))
+		}
+
 	}
 
 	if contentType == UnknownString {

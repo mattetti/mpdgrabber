@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -17,9 +16,14 @@ import (
 )
 
 var (
-	TotalWorkers    = 4
-	TmpFolder, _    = ioutil.TempDir("", "mpdgrabber")
-	filenameCleaner = strings.NewReplacer("/", "-", "!", "", "?", "", ",", "")
+	TotalWorkers         = 4
+	TmpFolder, _         = ioutil.TempDir("", "mpdgrabber")
+	filenameCleaner      = strings.NewReplacer("/", "-", "!", "", "?", "", ",", "")
+	AudioDownloadEnabled = true
+	VideoDownloadEnabled = true
+	TextDownloadEnabled  = true
+	// inclusive filter, all languages are downloaded by default
+	LangFilter = []string{}
 
 	DlChan  = make(chan *WJob)
 	segChan = make(chan *WJob)
@@ -32,7 +36,7 @@ const (
 	ManifestDL
 	ListDL
 	VideoDL
-	AudioDL
+	AudioSegmentDL
 	TextDL
 )
 
@@ -106,7 +110,7 @@ func (w *Worker) dispatch(job *WJob) {
 	// case AudioDL:
 	// 	w.downloadAudio(job)
 	default:
-		Logger.Println("format not supported")
+		Logger.Printf("format: %v not supported by workers\n", job.Type)
 		return
 	}
 
@@ -152,133 +156,183 @@ func DownloadFromMPDFile(manifestURL, destPath string) error {
 
 	tmpBaseURL := baseURL
 	for _, period := range mpdData.Periods {
-		fmt.Printf("Period ID: %s, duration: %s", period.ID, time.Duration(period.Duration).String())
+		if Debug {
+			fmt.Printf("Period ID: %s, duration: %s\n", period.ID, time.Duration(period.Duration).String())
+		}
+
 		if period.BaseURL != "" {
 			tmpBaseURL = absBaseURL(tmpBaseURL, period.BaseURL)
-			fmt.Printf(" Base URL:%s", tmpBaseURL.String())
+			if Debug {
+				fmt.Printf(" Base URL:%s", tmpBaseURL.String())
+				fmt.Println()
+			}
 		}
-		fmt.Println()
 
 		for _, adaptationSet := range period.AdaptationSets {
-			fmt.Printf(">> Adaptation set ID: %s/%s - %s, mimeType: %s, lang: %s, codecs: %s \n",
-				strPtrtoS(adaptationSet.ID),
-				strPtrtoS(adaptationSet.Group),
-				strPtrtoS(adaptationSet.ContentType),
-				strPtrtoS(adaptationSet.MimeType),
-				strPtrtoS(adaptationSet.Lang),
-				strPtrtoS(adaptationSet.Codecs),
-			)
+			contentType := strPtrtoS(adaptationSet.ContentType)
 
-			// var codecs string
-			for _, r := range adaptationSet.Representations {
-				switch *adaptationSet.ContentType {
-				case "video":
-					fmt.Printf("\tRep ID: %s, Bandwidth: %d, width: %d, height: %d, codecs: %s, scanType: %s\n", strPtrtoS(r.ID), int64PtrToI(r.Bandwidth), int64PtrToI(r.Width), int64PtrToI(r.Height), strPtrtoS(r.Codecs), strPtrtoS(r.ScanType))
+			if shouldSkipLang(strPtrtoS(adaptationSet.Lang)) {
+				continue
+			}
 
-					//
-					if r.BaseURL != nil {
-						tmpBaseURL = absBaseURL(tmpBaseURL, *r.BaseURL)
-						fmt.Println("\tRepresentation BaseURL:", tmpBaseURL)
-					}
-					fmt.Println()
-
-				case "audio":
-					fmt.Printf("\tRep ID: %s, Bandwidth: %d, SR: %d\n", strPtrtoS(r.ID), int64PtrToI(r.Bandwidth), int64PtrToI(r.AudioSamplingRate))
-
-					if r.BaseURL != nil {
-						tmpBaseURL = absBaseURL(tmpBaseURL, *r.BaseURL)
-						fmt.Println("\tRepresentation BaseURL:", tmpBaseURL)
-					}
-					fmt.Println()
-				case "text":
-					fmt.Printf("\tRep ID: %s, Codecs: %s\n", strPtrtoS(r.ID), strPtrtoS(r.Codecs))
-					if r.BaseURL != nil {
-						tmpBaseURL = absBaseURL(tmpBaseURL, *r.BaseURL)
-						fmt.Println("\tRepresentation BaseURL:", tmpBaseURL)
-					}
-					if r.SegmentBase != nil {
-						fmt.Printf("\tSegmentBase Timescale: %d\n", uit32PtrToI(r.SegmentBase.Timescale))
-						fmt.Printf("\tSegmentBase Index Range: %s\n", strPtrtoS(r.SegmentBase.IndexRange))
-						if r.SegmentBase.Initialization != nil {
-							if r.SegmentBase.Initialization.SourceURL != nil {
-								fmt.Printf("\tSegmentBase Initialization src url: %s\n", strPtrtoS(r.SegmentBase.Initialization.SourceURL))
-							}
-							fmt.Printf("\tSegmentBase Initialization range: %s\n", strPtrtoS(r.SegmentBase.Initialization.Range))
-						}
-					}
-
-					// job := &WJob{}
-				default:
-					log.Printf("\tUnknown content type: %s\n", *adaptationSet.ContentType)
+			// filter content types based on download flags
+			switch contentType {
+			case "video":
+				if !VideoDownloadEnabled {
+					continue
+				}
+			case "audio":
+				if !AudioDownloadEnabled {
+					continue
+				}
+			case "text":
+				if !TextDownloadEnabled {
+					continue
 				}
 			}
-			fmt.Println()
+
+			if Debug {
+				debugPrintAdaptationSet(adaptationSet)
+			}
+
+			r := highestRepresentation(contentType, adaptationSet.Representations)
+			if Debug {
+				fmt.Println("\tBest representation:")
+				debugPrintRepresentation(tmpBaseURL, contentType, r)
+				fmt.Println()
+			}
+
+			if r == nil {
+				Logger.Println("no representation found for adaptation set:", strPtrtoS(adaptationSet.ID))
+				continue
+			}
+
+			switch contentType {
+			case "video":
+
+			case "audio":
+				if isSegmentBase(r) {
+					job := &WJob{
+						Type:     AudioSegmentDL,
+						URL:      tmpBaseURL.String(),
+						DestPath: "",
+						Filename: "",
+					}
+					DlChan <- job
+				} else {
+					// TODO: support segment list and template
+					Logger.Printf("audio is not segment base, AS ID: %s, Rep ID: %s", strPtrtoS(adaptationSet.ID), strPtrtoS(r.ID))
+				}
+
+			case "text":
+			default:
+				Logger.Println("unknown content type:", contentType)
+			}
+
 		}
 	}
-
-	// job := &WJob{
-	// 	Type:     ListDL,
-	// 	URL:      manifestURL,
-	// 	SubsOnly: *subsOnly,
-	// 	// SkipConverter: true,
-	// 	DestPath: pathToUse,
-	// 	Filename: filename}
-	// DlChan <- job
 
 	return nil
 
 }
 
-func absBaseURL(manifestBaseURL *url.URL, elBaseURL string) *url.URL {
-	u, err := url.Parse(elBaseURL)
-	if err != nil {
-		if Debug {
-			fmt.Printf("failed to parse the base url %s - %s\n", elBaseURL, err)
+func highestRepresentation(contentType string, representations []*mpd.Representation) *mpd.Representation {
+	var highestBandwidth int64
+	var highestWidth int64
+	var highestRep *mpd.Representation
+
+	// Video
+	if strings.ToLower(contentType) == "video" {
+		for _, r := range representations {
+			// try the width first (since the bandwidth is codec dependent)
+			if r.Width != nil {
+				if *r.Width > highestWidth {
+					highestWidth = *r.Width
+					highestRep = r
+				}
+			} else if r.Bandwidth != nil {
+				if *r.Bandwidth > highestBandwidth {
+					highestBandwidth = *r.Bandwidth
+					highestRep = r
+				}
+			}
 		}
-		return manifestBaseURL
+	} else
+
+	// Audio
+	if strings.ToLower(contentType) == "audio" {
+		for _, r := range representations {
+			// try the bandwidth first
+			if r.Bandwidth != nil && *r.Bandwidth > highestBandwidth {
+				highestBandwidth = *r.Bandwidth
+				highestRep = r
+			}
+			// TODO: consider filtering/sorting codecs since bigger isn't always better
+		}
+	} else
+
+	// Text
+	if strings.ToLower(contentType) == "text" {
+		for _, r := range representations {
+			// try the bandwidth first
+			if r.Bandwidth != nil && *r.Bandwidth > highestBandwidth {
+				highestBandwidth = *r.Bandwidth
+				highestRep = r
+			}
+		}
 	}
-	if u.IsAbs() {
-		return u
+
+	if highestRep == nil {
+		Logger.Println("No highest representation found for content type", contentType, "picking the last one")
+		// pick the last one, hoping it's the highest quality
+		highestRep = representations[len(representations)-1]
 	}
-	return manifestBaseURL.ResolveReference(u)
+
+	return highestRep
 }
 
-// downloadFile downloads a file from a given url and saves it to a given path
-// it returns the file and an error if something goes wrong
-// It's the caller's responsibility to close the file.
-func downloadFile(url string, path string) (*os.File, error) {
-	// Create the file
-	out, err := os.Create(path)
-	if err != nil {
-		return nil, err
+func isSegmentBase(r *mpd.Representation) bool {
+
+	/*
+		  See https://bitmovin.com/dynamic-adaptive-streaming-http-mpeg-dash/#:~:text=4%3A%20Segment%20Referencing%20Schemes
+
+			A representation should only contain one of the following options:
+			* one or more SegmentList elements
+			* one SegmentTemplate
+			* one or more BaseURL elements, at most one SegmentBase element and no SegmentTemplate or SegmentList element.
+	*/
+
+	if r.SegmentBase != nil {
+		return true
 	}
 
-	// build the request with the proper headers
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Add("Accept", "application/dash+xml,video/vnd.mpeg.dash.mpd")
-
-	// call the request
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	// Check server response
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("bad status: %s", resp.Status)
+	if r.SegmentList != nil {
+		return false
 	}
 
-	// Write the body to file
-	_, err = io.Copy(out, resp.Body)
-	if err != nil {
-		return nil, err
+	if r.SegmentTemplate != nil {
+		return false
 	}
 
-	return out, nil
+	return true
+}
+
+func shouldSkipLang(lang string) bool {
+	if lang == "" || lang == "und" || lang == UnknownString {
+		return false
+	}
+
+	if len(LangFilter) == 0 {
+		return false
+	}
+
+	for _, l := range LangFilter {
+		if l == lang {
+			return false
+		}
+	}
+
+	return true
 }
 
 // Close closes the open channels to stop the workers cleanly

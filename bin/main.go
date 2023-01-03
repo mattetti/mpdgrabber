@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 
 	"github.com/mattetti/mpdgrabber"
@@ -19,6 +20,10 @@ var (
 	debugFlag      = flag.Bool("debug", true, "Set debug mode")
 	URLFlag        = flag.String("url", audioAndVideoManifest, "URL of the mpeg-dash manifest to backup.")
 	outputFileName = flag.String("output", "downloaded_video", "The name of the output file without the extension.")
+	audioOnlyFlag  = flag.Bool("audio-only", false, "Download only the audio tracks.")
+	videoOnlyFlag  = flag.Bool("video-only", false, "Download only the video tracks.")
+	textOnlyFlag   = flag.Bool("text-only", false, "Download only the text tracks.")
+	langsOnlyFlag  = flag.String("langs-only", "", "Download only the text tracks for the specified languages (comma separated).")
 )
 
 func main() {
@@ -35,6 +40,27 @@ func main() {
 	if mpdgrabber.Debug {
 		mpdgrabber.Logger.Println("Downloading", *URLFlag)
 		fmt.Println()
+	}
+
+	if *audioOnlyFlag {
+		mpdgrabber.AudioDownloadEnabled = true
+		mpdgrabber.VideoDownloadEnabled = false
+		mpdgrabber.TextDownloadEnabled = false
+	} else if *videoOnlyFlag {
+		mpdgrabber.AudioDownloadEnabled = false
+		mpdgrabber.VideoDownloadEnabled = true
+		mpdgrabber.TextDownloadEnabled = false
+	} else if *textOnlyFlag {
+		mpdgrabber.AudioDownloadEnabled = false
+		mpdgrabber.VideoDownloadEnabled = false
+		mpdgrabber.TextDownloadEnabled = true
+	}
+
+	if *langsOnlyFlag != "" {
+		mpdgrabber.LangFilter = strings.Split(*langsOnlyFlag, ",")
+		for i, lang := range mpdgrabber.LangFilter {
+			mpdgrabber.LangFilter[i] = strings.TrimSpace(lang)
+		}
 	}
 
 	wg := &sync.WaitGroup{}

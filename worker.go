@@ -142,21 +142,25 @@ func DownloadFromMPDFile(manifestURL, destPath string) error {
 
 	maniURL, _ := url.Parse(manifestURL)
 
-	var baseURL string
-	if mpdData.BaseURL != "" {
+	var baseURL *url.URL
+	if mpdData.BaseURL == "" {
+		baseURL = maniURL
+	} else {
 		baseURL = absBaseURL(maniURL, mpdData.BaseURL)
-		fmt.Println("Base URL", baseURL)
+		fmt.Println("Base URL", baseURL.String())
 	}
 
+	tmpBaseURL := baseURL
 	for _, period := range mpdData.Periods {
 		fmt.Printf("Period ID: %s, duration: %s", period.ID, time.Duration(period.Duration).String())
 		if period.BaseURL != "" {
-			fmt.Printf(" Base URL:%s", absBaseURL(maniURL, period.BaseURL))
+			tmpBaseURL = absBaseURL(tmpBaseURL, period.BaseURL)
+			fmt.Printf(" Base URL:%s", tmpBaseURL.String())
 		}
 		fmt.Println()
 
 		for _, adaptationSet := range period.AdaptationSets {
-			fmt.Printf("Adaptation set ID: %s/%s - %s, mimeType: %s, lang: %s, codecs: %s \n",
+			fmt.Printf(">> Adaptation set ID: %s/%s - %s, mimeType: %s, lang: %s, codecs: %s \n",
 				strPtrtoS(adaptationSet.ID),
 				strPtrtoS(adaptationSet.Group),
 				strPtrtoS(adaptationSet.ContentType),
@@ -164,21 +168,48 @@ func DownloadFromMPDFile(manifestURL, destPath string) error {
 				strPtrtoS(adaptationSet.Lang),
 				strPtrtoS(adaptationSet.Codecs),
 			)
+
 			// var codecs string
 			for _, r := range adaptationSet.Representations {
 				switch *adaptationSet.ContentType {
 				case "video":
-					fmt.Printf("Rep ID: %s, Bandwidth: %d, width: %d, height: %d, codecs: %s, scanType: %s\n", strPtrtoS(r.ID), int64PtrToI(r.Bandwidth), int64PtrToI(r.Width), int64PtrToI(r.Height), strPtrtoS(r.Codecs), strPtrtoS(r.ScanType))
-				case "audio":
-					fmt.Printf("Rep ID: %s, Bandwidth: %d, SR: %d", strPtrtoS(r.ID), int64PtrToI(r.Bandwidth), int64PtrToI(r.AudioSamplingRate))
+					fmt.Printf("\tRep ID: %s, Bandwidth: %d, width: %d, height: %d, codecs: %s, scanType: %s\n", strPtrtoS(r.ID), int64PtrToI(r.Bandwidth), int64PtrToI(r.Width), int64PtrToI(r.Height), strPtrtoS(r.Codecs), strPtrtoS(r.ScanType))
+
+					//
 					if r.BaseURL != nil {
-						fmt.Println("Period BaseURL:", absBaseURL(maniURL, *r.BaseURL))
+						tmpBaseURL = absBaseURL(tmpBaseURL, *r.BaseURL)
+						fmt.Println("\tRepresentation BaseURL:", tmpBaseURL)
+					}
+					fmt.Println()
+
+				case "audio":
+					fmt.Printf("\tRep ID: %s, Bandwidth: %d, SR: %d\n", strPtrtoS(r.ID), int64PtrToI(r.Bandwidth), int64PtrToI(r.AudioSamplingRate))
+
+					if r.BaseURL != nil {
+						tmpBaseURL = absBaseURL(tmpBaseURL, *r.BaseURL)
+						fmt.Println("\tRepresentation BaseURL:", tmpBaseURL)
 					}
 					fmt.Println()
 				case "text":
-					fmt.Printf("Rep ID: %s\n", strPtrtoS(r.ID))
+					fmt.Printf("\tRep ID: %s, Codecs: %s\n", strPtrtoS(r.ID), strPtrtoS(r.Codecs))
+					if r.BaseURL != nil {
+						tmpBaseURL = absBaseURL(tmpBaseURL, *r.BaseURL)
+						fmt.Println("\tRepresentation BaseURL:", tmpBaseURL)
+					}
+					if r.SegmentBase != nil {
+						fmt.Printf("\tSegmentBase Timescale: %d\n", uit32PtrToI(r.SegmentBase.Timescale))
+						fmt.Printf("\tSegmentBase Index Range: %s\n", strPtrtoS(r.SegmentBase.IndexRange))
+						if r.SegmentBase.Initialization != nil {
+							if r.SegmentBase.Initialization.SourceURL != nil {
+								fmt.Printf("\tSegmentBase Initialization src url: %s\n", strPtrtoS(r.SegmentBase.Initialization.SourceURL))
+							}
+							fmt.Printf("\tSegmentBase Initialization range: %s\n", strPtrtoS(r.SegmentBase.Initialization.Range))
+						}
+					}
+
+					// job := &WJob{}
 				default:
-					log.Printf("Unknown content type: %s", *adaptationSet.ContentType)
+					log.Printf("\tUnknown content type: %s\n", *adaptationSet.ContentType)
 				}
 			}
 			fmt.Println()
@@ -198,18 +229,18 @@ func DownloadFromMPDFile(manifestURL, destPath string) error {
 
 }
 
-func absBaseURL(manifestBaseURL *url.URL, elBaseURL string) string {
+func absBaseURL(manifestBaseURL *url.URL, elBaseURL string) *url.URL {
 	u, err := url.Parse(elBaseURL)
 	if err != nil {
 		if Debug {
 			fmt.Printf("failed to parse the base url %s - %s\n", elBaseURL, err)
 		}
-		return manifestBaseURL.String()
+		return manifestBaseURL
 	}
 	if u.IsAbs() {
-		return u.String()
+		return u
 	}
-	return manifestBaseURL.ResolveReference(u).String()
+	return manifestBaseURL.ResolveReference(u)
 }
 
 // downloadFile downloads a file from a given url and saves it to a given path

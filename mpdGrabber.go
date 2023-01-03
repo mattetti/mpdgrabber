@@ -21,3 +21,10 @@ func int64PtrToI(d *int64) int {
 	}
 	return int(*d)
 }
+
+func uit32PtrToI(d *uint32) int {
+	if d == nil {
+		return 0
+	}
+	return int(*d)
+}

@@ -224,6 +224,10 @@ func (w *Worker) downloadManifest(job *WJob) {
 				}
 			}
 			setBaseURL := absBaseURL(tmpBaseURL, adaptationSet.BaseURL)
+			// populate the adaptation set in the representation
+			for i := range adaptationSet.Representations {
+				adaptationSet.Representations[i].AdaptationSet = adaptationSet
+			}
 
 			if shouldSkipLang(strPtrtoS(adaptationSet.Lang)) {
 				if Debug {
@@ -432,6 +436,15 @@ func isSegmentBase(r *mpd.Representation) bool {
 	}
 
 	if r.SegmentTemplate != nil {
+		return false
+	}
+
+	// check the parent segmentTemplate
+	if r.AdaptationSet != nil && r.AdaptationSet.SegmentTemplate != nil {
+		return false
+	}
+
+	if len(r.BaseURL) == 0 {
 		return false
 	}
 

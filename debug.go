@@ -69,6 +69,19 @@ func debugPrintRepresentation(baseURL *url.URL, contentType string, r *mpd.Repre
 		}
 	}
 
+	if r.AdaptationSet != nil && r.AdaptationSet.SegmentTemplate != nil {
+		if Debug {
+			fmt.Println("\t-> AdaptationSet SegmentTemplate")
+		}
+		segmentUrls := templateSubstitution(r.AdaptationSet.SegmentTemplate.Initialization, r)
+		segmentUrls = append(segmentUrls, templateSubstitution(r.AdaptationSet.SegmentTemplate.Media, r)...)
+		fmt.Println("\t\t# of Segment URLs:", len(segmentUrls))
+		for i, segmentURL := range segmentUrls {
+			segmentUrls[i] = absBaseURL(rURL, []string{segmentURL}).String()
+			fmt.Println("\t\tSegment URL:", segmentUrls[i])
+		}
+	}
+
 	if r.SegmentTemplate != nil {
 		// <SegmentTemplate timescale="48000" media="2second/tears_of_steel_1080p_audio_32k_dash_track1_$Number$.mp4" startNumber="1" duration="95232" initialization="2second/tears_of_steel_1080p_audio_32k_dash_track1_init.mp4"/>
 		if r.SegmentTemplate.Timescale != nil {

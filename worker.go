@@ -139,8 +139,12 @@ func (w *Worker) dispatch(job *WJob) {
 			fmt.Printf("-> [W%d] start downloading %s segment: [%d/%d]\n", w.id, job.Type, job.Pos, job.Total)
 		}
 		w.downloadSegment(job)
-	// case TextSegmentDL, TextPartialSegmentDL:
-	// 	w.downloadText(job)
+	case TextSegmentDL, TextPartialSegmentDL:
+		job.wg.Add(1)
+		if Debug {
+			fmt.Printf("-> [W%d] start downloading %s segment: [%d/%d]\n", w.id, job.Type, job.Pos, job.Total)
+		}
+		w.downloadSegment(job)
 	default:
 		Logger.Printf("format: %s not supported by workers\n", job.Type)
 		return
@@ -212,7 +216,7 @@ func (w *Worker) downloadManifest(job *WJob) {
 
 	audioTracks := []*OutputTrack{}
 	videoTracks := []*OutputTrack{}
-	// textFiles := []string{}
+	textTracks := []*OutputTrack{}
 
 	maniURL, _ := url.Parse(job.URL)
 	var baseURL *url.URL
@@ -303,6 +307,8 @@ func (w *Worker) downloadManifest(job *WJob) {
 				Logger.Printf("Downloading Audio Track: %s", strPtrtoS(r.ID))
 				downloadAudioRepresentation(job, rBaseURL, r, &audioTracks)
 			case "text":
+				Logger.Printf("Downloading Text Track: %s", strPtrtoS(r.ID))
+				downloadTextRepresentation(job, rBaseURL, r, &textTracks)
 			default:
 				Logger.Println("unknown content type:", contentType)
 			}
@@ -311,7 +317,7 @@ func (w *Worker) downloadManifest(job *WJob) {
 	}
 
 	outputPath := filepath.Join(job.DestPath, job.Filename) + ".mkv"
-	err = Mux(outputPath, audioTracks, videoTracks)
+	err = Mux(outputPath, audioTracks, videoTracks, textTracks)
 	if err != nil {
 		Logger.Println("Failed to mux audio tracks:", err)
 		os.Exit(1)
@@ -326,6 +332,10 @@ func downloadVideoRepresentation(job *WJob, baseURL *url.URL, r *mpd.Representat
 
 func downloadAudioRepresentation(job *WJob, baseURL *url.URL, r *mpd.Representation, audioTracks *[]*OutputTrack) {
 	downloadRepresentation(job, baseURL, r, ContentTypeAudio, audioTracks)
+}
+
+func downloadTextRepresentation(job *WJob, baseURL *url.URL, r *mpd.Representation, textTracks *[]*OutputTrack) {
+	downloadRepresentation(job, baseURL, r, ContentTypeText, textTracks)
 }
 
 func downloadRepresentation(job *WJob, baseURL *url.URL, r *mpd.Representation, cType ContentType, outputTracks *[]*OutputTrack) {
@@ -396,6 +406,7 @@ func downloadRepresentation(job *WJob, baseURL *url.URL, r *mpd.Representation, 
 				job := &WJob{
 					Type:         jobType,
 					Pos:          i,
+					Total:        nbrSegments,
 					URL:          strPtrtoS(segURL.Media),
 					AbsolutePath: path,
 					Filename:     outFilename,
@@ -421,6 +432,7 @@ func downloadRepresentation(job *WJob, baseURL *url.URL, r *mpd.Representation, 
 					job := &WJob{
 						Type:         jobType,
 						Pos:          i,
+						Total:        nbrSegments,
 						URL:          segurl,
 						AbsolutePath: path,
 						Filename:     outFilename,
@@ -438,17 +450,17 @@ func downloadRepresentation(job *WJob, baseURL *url.URL, r *mpd.Representation, 
 				tempPathPattern := filepath.Join(job.DestPath, outFilename)
 				outPath = tempPathPattern + guessedExtension(r)
 				Logger.Printf("Reconstructing sub %s file: %s\n", cType, filepath.Base(outPath))
-				err := reassembleFile(tempPathPattern, suffix, outPath, len(segURLs))
+				err := reassembleFile(tempPathPattern, suffix, outPath, len(segURLs), cType)
 				if err != nil {
-					job.Err = fmt.Errorf("error reassembling audio: %s - %v", outPath, err)
+					job.Err = fmt.Errorf("error reassembling file: %s - %v", outPath, err)
 					Logger.Println(job.Err)
 					return
 				}
 			}
 
 		} else {
-			// TODO: support segment list and template
-			Logger.Printf("audio is not in a supported format, AS ID: %s, Rep ID: %s", strPtrtoS(r.AdaptationSet.ID), strPtrtoS(r.ID))
+			Logger.Printf("track is not in a supported format, AS ID: %s, Rep ID: %s", strPtrtoS(r.AdaptationSet.ID), strPtrtoS(r.ID))
+			return
 		}
 
 		if outPath != "" {
@@ -475,6 +487,10 @@ func (w *Worker) downloadSegment(job *WJob) {
 			job.wg.Done()
 		}
 	}()
+
+	if fileExists(job.AbsolutePath) {
+		Logger.Println("File already present", job.AbsolutePath)
+	}
 
 	audioF, err := downloadFile(job.URL, job.AbsolutePath)
 	if err != nil {

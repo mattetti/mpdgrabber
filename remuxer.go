@@ -10,6 +10,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/mattetti/mpdgrabber/mp4"
+	"github.com/mattetti/mpdgrabber/ttml"
 )
 
 func FfmpegPath() (string, error) {
@@ -24,7 +27,7 @@ func FfmpegPath() (string, error) {
 	return strings.Trim(strings.Trim(string(buf), "\r\n"), "\n"), err
 }
 
-func Mux(outFilePath string, audioTracks []*OutputTrack, videoTracks []*OutputTrack) error {
+func Mux(outFilePath string, audioTracks, videoTracks, textTracks []*OutputTrack) error {
 	ffmpegPath, err := FfmpegPath()
 	if err != nil {
 		Logger.Fatalf("ffmpeg wasn't found on your system, it is required to convert video files.\n" +
@@ -34,12 +37,14 @@ func Mux(outFilePath string, audioTracks []*OutputTrack, videoTracks []*OutputTr
 
 	// -y overwrites without asking
 	args := []string{"-y"}
+	mapArgs := []string{}
 
 	trackNbr := 0
 	// add the audio files
 	for _, track := range audioTracks {
 		if fileExists(track.AbsolutePath) {
 			args = append(args, "-i", track.AbsolutePath)
+			mapArgs = append(mapArgs, "-map", fmt.Sprintf("%d:a", trackNbr))
 			trackNbr++
 		}
 	}
@@ -48,6 +53,16 @@ func Mux(outFilePath string, audioTracks []*OutputTrack, videoTracks []*OutputTr
 	for _, track := range videoTracks {
 		if fileExists(track.AbsolutePath) {
 			args = append(args, "-i", track.AbsolutePath)
+			mapArgs = append(mapArgs, "-map", fmt.Sprintf("%d:v", trackNbr))
+			trackNbr++
+		}
+	}
+
+	for _, track := range textTracks {
+		if fileExists(track.AbsolutePath) {
+			args = append(args, "-i", track.AbsolutePath)
+			// ttml subs aren't supported by ffmpeg so we need to use raw data type
+			mapArgs = append(mapArgs, "-map", fmt.Sprintf("%d:s", trackNbr))
 			trackNbr++
 		}
 	}
@@ -56,15 +71,14 @@ func Mux(outFilePath string, audioTracks []*OutputTrack, videoTracks []*OutputTr
 		return fmt.Errorf("No tracks found, nothing to mux")
 	}
 
-	for i := 0; i < trackNbr; i++ {
-		args = append(args, "-map", fmt.Sprintf("%d", i))
-	}
+	// map tags
+	args = append(args, mapArgs...)
 
 	// add the rest of the args
 	args = append(args,
 		"-vcodec", "copy",
 		"-acodec", "copy",
-		// "-bsf:a", "aac_adtstoasc"
+		"-dcodec", "copy",
 	)
 
 	args = append(args, outFilePath)
@@ -109,8 +123,7 @@ func Mux(outFilePath string, audioTracks []*OutputTrack, videoTracks []*OutputTr
 	return err
 }
 
-func reassembleFile(tempPath string, suffix string, outPath string, nbrSegments int) error {
-
+func reassembleFile(tempPath string, suffix string, outPath string, nbrSegments int, cType ContentType) error {
 	// look for all files in path that start by the baseFilename and suffix
 	// for each file, open it and write it to the output file
 	files, err := filepath.Glob(tempPath + suffix + "*")
@@ -136,19 +149,86 @@ func reassembleFile(tempPath string, suffix string, outPath string, nbrSegments 
 		return a < b
 	})
 
+	TTMLFlag := -1
+	var ttmlDoc *ttml.Document
+
 	for _, fPath := range files {
 		in, err := os.Open(fPath)
 		if err != nil {
 			return fmt.Errorf("failed to open %s - %w", fPath, err)
 		}
 		defer in.Close()
-		_, err = io.Copy(out, in)
-		if err != nil {
-			return fmt.Errorf("failed to copy %s to %s - %w", fPath, outPath, err)
+
+		// dealing with text files differently
+		// we write the data to the file, removing the mp4 encapsulation
+		if cType == ContentTypeText {
+			atoms, err := mp4.ParseAtoms(in)
+			if err != nil {
+				return fmt.Errorf("failed to parse atoms in %s - %w", fPath, err)
+			}
+			for _, atom := range atoms {
+				// comment out the following if you don't want to print the styp atom (debugging)
+				// if atom.Type() == mp4.STYP {
+				// 	// print the styp atom
+				// 	data, err := atom.ParseSTYP()
+				// 	if err != nil {
+				// 		panic(fmt.Sprintf("failed to parse styp atom in %s - %v", fPath, err))
+				// 	}
+				// 	fmt.Printf("styp: %s\n", data)
+				// }
+
+				if atom.Type() == mp4.MDAT {
+
+					if TTMLFlag == -1 {
+						// peak atom.Data and check if it starts by "<?xml"
+						// if it does, it's a ttml file
+						// if it doesn't, it's a webvtt file
+						if (len(atom.Data) > 5) && strings.Contains(string(atom.Data[:5]), "<?xml") {
+							// if Debug {
+							// 	fmt.Println("ttml content found")
+							// }
+							TTMLFlag = 1
+						} else {
+							TTMLFlag = 0
+							// write the atom to the output file
+						}
+					}
+
+					if TTMLFlag == 1 {
+						if ttmlDoc == nil {
+							ttmlDoc, err = ttml.New(atom.Data)
+							if err != nil {
+								Logger.Println("something wrong happened when parsing the ttml data", err)
+							}
+						} else {
+							ttmlDoc.MergeFromData(atom.Data)
+						}
+					} else {
+						fmt.Println("non TTLM subtitles might not work")
+						_, err = atom.Write(out)
+						if err != nil {
+							return fmt.Errorf("failed to write atom to %s - %w", outPath, err)
+						}
+					}
+				}
+			}
+		} else {
+
+			// copy the file to the output file as is
+			_, err = io.Copy(out, in)
+			if err != nil {
+				return fmt.Errorf("failed to copy %s to %s - %w", fPath, outPath, err)
+			}
 		}
+
 		err = os.Remove(fPath)
 		if err != nil {
 			return fmt.Errorf("failed to remove %s - %w", fPath, err)
+		}
+	}
+	if TTMLFlag == 1 && ttmlDoc != nil {
+		if err = ttmlDoc.Write(out); err != nil {
+			return fmt.Errorf("failed to write ttmlDoc to %s - %w", outPath, err)
 		}
 	}
 

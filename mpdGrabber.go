@@ -253,24 +253,23 @@ func guessedExtension(r *mpd.Representation) string {
 	if r == nil {
 		return ""
 	}
-	// mimetype check first
-	mimeType := strPtrtoS(r.MimeType)
-	if mimeType == UnknownString && r.AdaptationSet != nil && r.AdaptationSet.MimeType != nil {
-		mimeType = strPtrtoS(r.AdaptationSet.MimeType)
-	}
-	if mimeType != UnknownString {
-		ext, err := mime.ExtensionsByType(mimeType)
-		if err == nil && len(ext) > 0 {
-			return ext[0]
-		}
-	}
 
-	// codec check next
+	// codec check first (especially because of text streams)
 	codec := strPtrtoS(r.Codecs)
-	if codec == "" && r.AdaptationSet != nil && r.AdaptationSet.Codecs != nil {
+	if codec == UnknownString && r.AdaptationSet != nil && r.AdaptationSet.Codecs != nil {
 		codec = strPtrtoS(r.AdaptationSet.Codecs)
 	}
-	if codec != "" {
+	if codec != UnknownString {
+		// stpp is a text stream
+		if strings.Contains(codec, "stpp") {
+			return ".ttml"
+		}
+
+		// webvtt is a text stream
+		if strings.Contains(codec, "webvtt") {
+			return ".vtt"
+		}
+
 		if strings.Contains(codec, "avc") {
 			return ".mp4"
 		}
@@ -291,6 +290,18 @@ func guessedExtension(r *mpd.Representation) string {
 		}
 		if strings.Contains(codec, "vp8") {
 			return ".webm"
+		}
+	}
+
+	// mimetype check
+	mimeType := strPtrtoS(r.MimeType)
+	if mimeType == UnknownString && r.AdaptationSet != nil && r.AdaptationSet.MimeType != nil {
+		mimeType = strPtrtoS(r.AdaptationSet.MimeType)
+	}
+	if mimeType != UnknownString {
+		ext, err := mime.ExtensionsByType(mimeType)
+		if err == nil && len(ext) > 0 {
+			return ext[0]
 		}
 	}
 

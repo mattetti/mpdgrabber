@@ -104,7 +104,9 @@ func templateSubstitution(templateStr *string, representation *mpd.Representatio
 	// Time-Based SegmentTemplate
 	// $Time$ identifier, which will be substituted with the value of the t attribute from the SegmentTimeline.
 	if strings.Contains(template, "$Time$") {
-		fmt.Println("\t-> Time-based SegmentTemplate")
+		if Debug {
+			fmt.Println("\t-> Time-based SegmentTemplate")
+		}
 		var segTemplate *mpd.SegmentTemplate
 		if representation.AdaptationSet != nil && representation.AdaptationSet.SegmentTemplate != nil {
 			segTemplate = representation.AdaptationSet.SegmentTemplate

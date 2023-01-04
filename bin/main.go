@@ -19,8 +19,8 @@ const (
 )
 
 var (
-	debugFlag      = flag.Bool("debug", true, "Set debug mode")
-	URLFlag        = flag.String("url", templatedManifest, "URL of the mpeg-dash manifest to backup.")
+	debugFlag      = flag.Bool("debug", false, "Set debug mode")
+	URLFlag        = flag.String("url", audioOnlyManifest, "URL of the mpeg-dash manifest to backup.")
 	outputFileName = flag.String("output", "downloaded_video", "The name of the output file without the extension.")
 	audioOnlyFlag  = flag.Bool("audio-only", false, "Download only the audio tracks.")
 	videoOnlyFlag  = flag.Bool("video-only", false, "Download only the video tracks.")

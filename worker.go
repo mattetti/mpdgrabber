@@ -93,6 +93,7 @@ type WJob struct {
 	DestPath      string
 	Filename      string
 	Pos           int
+	Total         int
 	Lang          string
 	// Err gets populated if something goes wrong while processing the job
 	Err error
@@ -135,7 +136,7 @@ func (w *Worker) dispatch(job *WJob) {
 	case VideoSegmentDL, VideoPartialSegmentDL, AudioSegmentDL, AudioPartialSegmentDL:
 		job.wg.Add(1)
 		if Debug {
-			fmt.Printf("-> [W%d] start downloading %s segment: [%d]\n", w.id, job.Type, job.Pos)
+			fmt.Printf("-> [W%d] start downloading %s segment: [%d/%d]\n", w.id, job.Type, job.Pos, job.Total)
 		}
 		w.downloadSegment(job)
 	// case TextSegmentDL, TextPartialSegmentDL:
@@ -164,9 +165,9 @@ func DownloadFromMPDFile(manifestURL, pathToUse, outFilename string) error {
 }
 
 func (w *Worker) downloadManifest(job *WJob) {
-	if Debug {
-		fmt.Println("-> Downloading the manifest file", job.URL)
-	}
+	// if Debug {
+	Logger.Println("Downloading manifest file:", job.URL)
+	// }
 	manifestPath := filepath.Join(TmpFolder, "manifest.mpd")
 	mpdF, err := downloadFile(job.URL, manifestPath)
 	if err != nil {
@@ -205,9 +206,9 @@ func (w *Worker) downloadManifest(job *WJob) {
 		job.Err = fmt.Errorf("dynamic mpd not supported")
 		return
 	}
-	if Debug {
-		fmt.Println("-> MPD file parsed")
-	}
+	// if Debug {
+	Logger.Println("MPD file parsed")
+	// }
 
 	audioTracks := []*OutputTrack{}
 	videoTracks := []*OutputTrack{}
@@ -296,8 +297,10 @@ func (w *Worker) downloadManifest(job *WJob) {
 
 			switch contentType {
 			case "video":
+				Logger.Printf("Downloading Video Track: %s", strPtrtoS(r.ID))
 				downloadVideoRepresentation(job, rBaseURL, r, &videoTracks)
 			case "audio":
+				Logger.Printf("Downloading Audio Track: %s", strPtrtoS(r.ID))
 				downloadAudioRepresentation(job, rBaseURL, r, &audioTracks)
 			case "text":
 			default:
@@ -313,6 +316,7 @@ func (w *Worker) downloadManifest(job *WJob) {
 		Logger.Println("Failed to mux audio tracks:", err)
 		os.Exit(1)
 	}
+	Logger.Printf("Created %s\n", outputPath)
 
 }
 
@@ -344,12 +348,14 @@ func downloadRepresentation(job *WJob, baseURL *url.URL, r *mpd.Representation, 
 			return
 		}
 
+		Logger.Printf("(1 %s segment)\n", cType)
 		job := &WJob{
 			Type:         jobType,
 			URL:          baseURL.String(),
 			AbsolutePath: outPath,
 			Filename:     outFilename,
 			wg:           job.wg,
+			Total:        1,
 		}
 		segChan <- job
 
@@ -382,6 +388,7 @@ func downloadRepresentation(job *WJob, baseURL *url.URL, r *mpd.Representation, 
 			var outFilename string
 			var path string
 
+			Logger.Printf("(%d %s segments)\n", nbrSegments, cType)
 			for i, segURL := range r.SegmentList.SegmentURLs {
 				outFilename = tmpFilenamePattern + strconv.Itoa(i)
 				path = filepath.Join(job.DestPath, outFilename)
@@ -404,9 +411,9 @@ func downloadRepresentation(job *WJob, baseURL *url.URL, r *mpd.Representation, 
 			nbrSegments = len(segURLs)
 			if len(segURLs) > 0 {
 				tmpFilenamePattern = filepath.Base(segURLs[0]) + suffix
-
-				tmpFilenamePattern := filepath.Base(segURLs[0]) + suffix
 				segWG := &sync.WaitGroup{}
+				Logger.Printf("(%d %s segments)\n", nbrSegments, cType)
+
 				for i, segurl := range segURLs {
 					outFilename := tmpFilenamePattern + strconv.Itoa(i)
 					path := filepath.Join(job.DestPath, outFilename)
@@ -426,10 +433,11 @@ func downloadRepresentation(job *WJob, baseURL *url.URL, r *mpd.Representation, 
 			}
 
 			if nbrSegments > 0 {
-				// the track to reassemble
 				outFilename := tmpFilenamePattern[:len(tmpFilenamePattern)-5]
+				// the track to reassemble
 				tempPathPattern := filepath.Join(job.DestPath, outFilename)
 				outPath = tempPathPattern + guessedExtension(r)
+				Logger.Printf("Reconstructing sub %s file: %s\n", cType, filepath.Base(outPath))
 				err := reassembleFile(tempPathPattern, suffix, outPath, len(segURLs))
 				if err != nil {
 					job.Err = fmt.Errorf("error reassembling audio: %s - %v", outPath, err)
@@ -474,7 +482,7 @@ func (w *Worker) downloadSegment(job *WJob) {
 		Logger.Println(err)
 	}
 	if Debug {
-		fmt.Printf("-> [W%d] done downloading %s segment [%d]\n", w.id, job.Type, job.Pos)
+		fmt.Printf("-> [W%d] done downloading %s segment [%d/%d]\n", w.id, job.Type, job.Pos, job.Total)
 	}
 	audioF.Close()
 	job.Err = err

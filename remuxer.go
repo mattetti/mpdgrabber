@@ -24,7 +24,7 @@ func FfmpegPath() (string, error) {
 	return strings.Trim(strings.Trim(string(buf), "\r\n"), "\n"), err
 }
 
-func Mux(outFilePath string, audioTracks []*AudioTrack) error {
+func Mux(outFilePath string, audioTracks []*OutputTrack) error {
 	ffmpegPath, err := FfmpegPath()
 	if err != nil {
 		Logger.Fatalf("ffmpeg wasn't found on your system, it is required to convert video files.\n" +

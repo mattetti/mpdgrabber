@@ -19,6 +19,27 @@ var Logger = log.New(os.Stdout, "", log.Ldate|log.Ltime|log.Lshortfile)
 
 const UnknownString = "unknown"
 
+type ContentType int
+
+const (
+	ContentTypeAudio ContentType = iota
+	ContentTypeVideo
+	ContentTypeText
+)
+
+func (c ContentType) String() string {
+	switch c {
+	case ContentTypeAudio:
+		return "audio"
+	case ContentTypeVideo:
+		return "video"
+	case ContentTypeText:
+		return "text"
+	default:
+		return UnknownString
+	}
+}
+
 func templatedSegments(baseURL *url.URL, representation *mpd.Representation) (segmentUrls []string) {
 	if representation == nil {
 		if Debug {

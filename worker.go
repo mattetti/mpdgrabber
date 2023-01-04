@@ -35,12 +35,37 @@ type WJobType int
 const (
 	_ WJobType = iota
 	ManifestDL
-	ListDL
-	VideoDL
+	VideoSegmentDL
+	VideoPartialSegmentDL
 	AudioSegmentDL
 	AudioPartialSegmentDL
+	TextSegmentDL
+	TextPartialSegmentDL
 	TextDL
 )
+
+func (w WJobType) String() string {
+	switch w {
+	case ManifestDL:
+		return "ManifestDL"
+	case VideoSegmentDL:
+		return "VideoSegmentDL"
+	case VideoPartialSegmentDL:
+		return "VideoPartialSegmentDL"
+	case AudioSegmentDL:
+		return "AudioSegmentDL"
+	case AudioPartialSegmentDL:
+		return "AudioPartialSegmentDL"
+	case TextSegmentDL:
+		return "TextSegmentDL"
+	case TextPartialSegmentDL:
+		return "TextPartialSegmentDL"
+	case TextDL:
+		return "TextDL"
+	default:
+		return "Unknown"
+	}
+}
 
 // LaunchWorkers starts download workers
 func LaunchWorkers(wg *sync.WaitGroup, stop <-chan bool) {
@@ -111,14 +136,14 @@ func (w *Worker) dispatch(job *WJob) {
 	// 	w.downloadVideo(job)
 	// case TextDL:
 	// 	w.downloadText(job)
-	case AudioSegmentDL:
+	case AudioSegmentDL, AudioPartialSegmentDL:
 		job.wg.Add(1)
 		if Debug {
 			fmt.Printf("-> [W%d] start downloading audio segment: [%d]\n", w.id, job.Pos)
 		}
 		w.downloadAudioSegment(job)
 	default:
-		Logger.Printf("format: %v not supported by workers\n", job.Type)
+		Logger.Printf("format: %s not supported by workers\n", job.Type)
 		return
 	}
 
@@ -187,8 +212,8 @@ func (w *Worker) downloadManifest(job *WJob) {
 		// FIXME: max segment duration is missing
 	}
 
-	audioTracks := []*AudioTrack{}
-	// videoFiles := []string{}
+	audioTracks := []*OutputTrack{}
+	videoTracks := []*OutputTrack{}
 	// textFiles := []string{}
 
 	maniURL, _ := url.Parse(job.URL)
@@ -274,7 +299,7 @@ func (w *Worker) downloadManifest(job *WJob) {
 
 			switch contentType {
 			case "video":
-
+				downloadVideoRepresentation(job, rBaseURL, r, &videoTracks)
 			case "audio":
 				downloadAudioRepresentation(job, rBaseURL, r, &audioTracks)
 
@@ -295,29 +320,61 @@ func (w *Worker) downloadManifest(job *WJob) {
 
 }
 
-func downloadAudioRepresentation(job *WJob, baseURL *url.URL, r *mpd.Representation, audioTracks *[]*AudioTrack) {
-	// download the audio segments
+func downloadVideoRepresentation(job *WJob, baseURL *url.URL, r *mpd.Representation, videoTracks *[]*OutputTrack) {
+	downloadRepresentation(job, baseURL, r, ContentTypeVideo, videoTracks)
+}
+
+func downloadAudioRepresentation(job *WJob, baseURL *url.URL, r *mpd.Representation, audioTracks *[]*OutputTrack) {
+	downloadRepresentation(job, baseURL, r, ContentTypeAudio, audioTracks)
+}
+
+func downloadRepresentation(job *WJob, baseURL *url.URL, r *mpd.Representation, cType ContentType, outputTracks *[]*OutputTrack) {
 
 	var outPath string
 	if isSegmentBase(r) {
 		// 1 big file for the entire representation, no need to assemble segments
-		audioFilename := filepath.Base(baseURL.Path)
-		outPath := filepath.Join(job.DestPath, audioFilename)
+		outFilename := filepath.Base(baseURL.Path)
+		outPath := filepath.Join(job.DestPath, outFilename)
+		var jobType WJobType
+		switch cType {
+		case ContentTypeAudio:
+			jobType = AudioSegmentDL
+		case ContentTypeVideo:
+			jobType = VideoSegmentDL
+		case ContentTypeText:
+			jobType = TextSegmentDL
+		default:
+			Logger.Println("unknown content type:", cType)
+			return
+		}
+
 		job := &WJob{
-			Type:         AudioSegmentDL,
+			Type:         jobType,
 			URL:          baseURL.String(),
 			AbsolutePath: outPath,
-			Filename:     audioFilename,
+			Filename:     outFilename,
 			wg:           job.wg,
 		}
 		segChan <- job
 
-		// audioTracks = append(audioTracks, at)
 	} else {
 		suffix := "_seg_"
 		// must be set by the segment list or segment template code sections
 		nbrSegments := 0
 		tmpFilenamePattern := ""
+		var jobType WJobType
+		switch cType {
+		case ContentTypeAudio:
+			jobType = AudioPartialSegmentDL
+		case ContentTypeVideo:
+			jobType = VideoPartialSegmentDL
+		case ContentTypeText:
+			jobType = TextPartialSegmentDL
+		default:
+			Logger.Println("unknown content type:", cType)
+			return
+		}
+
 		// Segment list
 		if r.SegmentList != nil && r.SegmentList.SegmentURLs != nil && len(r.SegmentList.SegmentURLs) > 0 {
 			// raw segment list
@@ -326,19 +383,19 @@ func downloadAudioRepresentation(job *WJob, baseURL *url.URL, r *mpd.Representat
 			segWG := &sync.WaitGroup{}
 			nbrSegments = len(r.SegmentList.SegmentURLs)
 			tmpFilenamePattern = filepath.Base(strPtrtoS(r.SegmentList.SegmentURLs[0].Media)) + suffix
-			var audioFilename string
+			var outFilename string
 			var path string
 
 			for i, segURL := range r.SegmentList.SegmentURLs {
-				audioFilename = tmpFilenamePattern + strconv.Itoa(i)
-				path = filepath.Join(job.DestPath, audioFilename)
+				outFilename = tmpFilenamePattern + strconv.Itoa(i)
+				path = filepath.Join(job.DestPath, outFilename)
 
 				job := &WJob{
-					Type:         AudioPartialSegmentDL,
+					Type:         jobType,
 					Pos:          i,
 					URL:          strPtrtoS(segURL.Media),
 					AbsolutePath: path,
-					Filename:     audioFilename,
+					Filename:     outFilename,
 					wg:           segWG,
 				}
 				segChan <- job
@@ -355,15 +412,15 @@ func downloadAudioRepresentation(job *WJob, baseURL *url.URL, r *mpd.Representat
 				tmpFilenamePattern := filepath.Base(segURLs[0]) + suffix
 				segWG := &sync.WaitGroup{}
 				for i, segurl := range segURLs {
-					audioFilename := tmpFilenamePattern + strconv.Itoa(i)
-					path := filepath.Join(job.DestPath, audioFilename)
+					outFilename := tmpFilenamePattern + strconv.Itoa(i)
+					path := filepath.Join(job.DestPath, outFilename)
 
 					job := &WJob{
-						Type:         AudioSegmentDL,
+						Type:         jobType,
 						Pos:          i,
 						URL:          segurl,
 						AbsolutePath: path,
-						Filename:     audioFilename,
+						Filename:     outFilename,
 						wg:           segWG,
 					}
 					segChan <- job
@@ -373,9 +430,9 @@ func downloadAudioRepresentation(job *WJob, baseURL *url.URL, r *mpd.Representat
 			}
 
 			if nbrSegments > 0 {
-				// the audio track to reassemble
-				audioFilename := tmpFilenamePattern[:len(tmpFilenamePattern)-5]
-				tempPathPattern := filepath.Join(job.DestPath, audioFilename)
+				// the track to reassemble
+				outFilename := tmpFilenamePattern[:len(tmpFilenamePattern)-5]
+				tempPathPattern := filepath.Join(job.DestPath, outFilename)
 				outPath = tempPathPattern + guessedExtension(r)
 				err := reassembleFile(tempPathPattern, suffix, outPath, len(segURLs))
 				if err != nil {
@@ -391,15 +448,16 @@ func downloadAudioRepresentation(job *WJob, baseURL *url.URL, r *mpd.Representat
 		}
 
 		if outPath != "" {
-			at := &AudioTrack{
+			at := &OutputTrack{
 				RepresentationID: strPtrtoS(r.ID),
 				BaseURL:          baseURL.String(),
 				Language:         strPtrtoS(r.AdaptationSet.Lang),
 				AbsolutePath:     outPath,
 				Codec:            strPtrtoS(r.Codecs),
 				SampleRate:       int64PtrToI(r.AudioSamplingRate),
+				MediaType:        ContentTypeAudio,
 			}
-			*audioTracks = append(*audioTracks, at)
+			*outputTracks = append(*outputTracks, at)
 		}
 	}
 }
@@ -606,11 +664,12 @@ func Close() {
 	close(DlChan)
 }
 
-type AudioTrack struct {
+type OutputTrack struct {
 	RepresentationID string
 	BaseURL          string // optional
 	Language         string
 	Codec            string
 	SampleRate       int
 	AbsolutePath     string
+	MediaType        ContentType
 }

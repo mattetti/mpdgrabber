@@ -61,7 +61,6 @@ func Mux(outFilePath string, audioTracks, videoTracks, textTracks []*OutputTrack
 	for _, track := range textTracks {
 		if fileExists(track.AbsolutePath) {
 			args = append(args, "-i", track.AbsolutePath)
-			// ttml subs aren't supported by ffmpeg so we need to use raw data type
 			mapArgs = append(mapArgs, "-map", fmt.Sprintf("%d:s", trackNbr))
 			trackNbr++
 		}
@@ -79,6 +78,7 @@ func Mux(outFilePath string, audioTracks, videoTracks, textTracks []*OutputTrack
 		"-vcodec", "copy",
 		"-acodec", "copy",
 		"-dcodec", "copy",
+		"-scodec", "mov_text",
 	)
 
 	args = append(args, outFilePath)

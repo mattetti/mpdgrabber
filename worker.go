@@ -304,10 +304,10 @@ func (w *Worker) downloadManifest(job *WJob) {
 				Logger.Printf("Downloading Video Track: %s", strPtrtoS(r.ID))
 				downloadVideoRepresentation(job, rBaseURL, r, &videoTracks)
 			case "audio":
-				Logger.Printf("Downloading Audio Track: %s", strPtrtoS(r.ID))
+				Logger.Printf("Downloading Audio Stream: %s", strPtrtoS(r.ID))
 				downloadAudioRepresentation(job, rBaseURL, r, &audioTracks)
 			case "text":
-				Logger.Printf("Downloading Text Track: %s", strPtrtoS(r.ID))
+				Logger.Printf("Downloading Text Stream: %s", strPtrtoS(r.ID))
 				downloadTextRepresentation(job, rBaseURL, r, &textTracks)
 			default:
 				Logger.Println("unknown content type:", contentType)
@@ -319,7 +319,7 @@ func (w *Worker) downloadManifest(job *WJob) {
 	outputPath := filepath.Join(job.DestPath, job.Filename) + ".mkv"
 	err = Mux(outputPath, audioTracks, videoTracks, textTracks)
 	if err != nil {
-		Logger.Println("Failed to mux audio tracks:", err)
+		Logger.Println("Failed to mux streams:", err)
 		os.Exit(1)
 	}
 	Logger.Printf("Created %s\n", outputPath)
@@ -448,7 +448,8 @@ func downloadRepresentation(job *WJob, baseURL *url.URL, r *mpd.Representation, 
 				outFilename := tmpFilenamePattern[:len(tmpFilenamePattern)-5]
 				// the track to reassemble
 				tempPathPattern := filepath.Join(job.DestPath, outFilename)
-				outPath = tempPathPattern + guessedExtension(r)
+				ext := guessedExtension(r)
+				outPath = tempPathPattern + ext
 				Logger.Printf("Reconstructing sub %s file: %s\n", cType, filepath.Base(outPath))
 				err := reassembleFile(tempPathPattern, suffix, outPath, len(segURLs), cType)
 				if err != nil {
@@ -473,7 +474,14 @@ func downloadRepresentation(job *WJob, baseURL *url.URL, r *mpd.Representation, 
 				SampleRate:       int64PtrToI(r.AudioSamplingRate),
 				MediaType:        ContentTypeAudio,
 			}
-			*outputTracks = append(*outputTracks, at)
+
+			// ffmpeg doesn't support ttml subtitles so we leave them as a separate file
+			if cType == ContentTypeText && filepath.Ext(outPath) == ".ttml" {
+				Logger.Println("FFmpeg doesn't support TTML subtitles, leaving them as a separate file:", outPath)
+			} else {
+				*outputTracks = append(*outputTracks, at)
+			}
+
 		}
 	}
 }

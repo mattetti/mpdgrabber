@@ -133,8 +133,8 @@ func (doc *Document) Write(w io.Writer) error {
 	// Start the tt element.
 	// Write the start element for the tt element, including all of the attributes.
 
-	// There is a weird issue with the xml package where it will not encode xmlns attributes properly
-	// hence this giant HACK :(
+	// There seems to be a weird issue with the xml package where it will not encode xmlns attributes properly (adding an underscore)
+	// hence this HACK :(
 	nAttrs := make([]xml.Attr, len(doc.Attrs))
 	for i, a := range doc.Attrs {
 		if a.Name.Space == "xmlns" {

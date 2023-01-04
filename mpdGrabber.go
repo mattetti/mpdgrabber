@@ -257,7 +257,6 @@ func guessedExtension(r *mpd.Representation) string {
 		mimeType = strPtrtoS(r.AdaptationSet.MimeType)
 	}
 	if mimeType != UnknownString {
-		fmt.Println("checking mimetype", mimeType)
 		ext, err := mime.ExtensionsByType(mimeType)
 		if err == nil && len(ext) > 0 {
 			return ext[0]

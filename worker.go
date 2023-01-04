@@ -132,16 +132,14 @@ func (w *Worker) dispatch(job *WJob) {
 	switch job.Type {
 	case ManifestDL:
 		w.downloadManifest(job)
-	// case VideoDL:
-	// 	w.downloadVideo(job)
-	// case TextDL:
-	// 	w.downloadText(job)
-	case AudioSegmentDL, AudioPartialSegmentDL:
+	case VideoSegmentDL, VideoPartialSegmentDL, AudioSegmentDL, AudioPartialSegmentDL:
 		job.wg.Add(1)
 		if Debug {
-			fmt.Printf("-> [W%d] start downloading audio segment: [%d]\n", w.id, job.Pos)
+			fmt.Printf("-> [W%d] start downloading %s segment: [%d]\n", w.id, job.Type, job.Pos)
 		}
-		w.downloadAudioSegment(job)
+		w.downloadSegment(job)
+	// case TextSegmentDL, TextPartialSegmentDL:
+	// 	w.downloadText(job)
 	default:
 		Logger.Printf("format: %s not supported by workers\n", job.Type)
 		return
@@ -209,7 +207,6 @@ func (w *Worker) downloadManifest(job *WJob) {
 	}
 	if Debug {
 		fmt.Println("-> MPD file parsed")
-		// FIXME: max segment duration is missing
 	}
 
 	audioTracks := []*OutputTrack{}
@@ -302,7 +299,6 @@ func (w *Worker) downloadManifest(job *WJob) {
 				downloadVideoRepresentation(job, rBaseURL, r, &videoTracks)
 			case "audio":
 				downloadAudioRepresentation(job, rBaseURL, r, &audioTracks)
-
 			case "text":
 			default:
 				Logger.Println("unknown content type:", contentType)
@@ -312,7 +308,7 @@ func (w *Worker) downloadManifest(job *WJob) {
 	}
 
 	outputPath := filepath.Join(job.DestPath, job.Filename) + ".mkv"
-	err = Mux(outputPath, audioTracks)
+	err = Mux(outputPath, audioTracks, videoTracks)
 	if err != nil {
 		Logger.Println("Failed to mux audio tracks:", err)
 		os.Exit(1)
@@ -462,9 +458,9 @@ func downloadRepresentation(job *WJob, baseURL *url.URL, r *mpd.Representation, 
 	}
 }
 
-func (w *Worker) downloadAudioSegment(job *WJob) {
+func (w *Worker) downloadSegment(job *WJob) {
 	// if Debug {
-	// 	fmt.Println("-> Downloading audio segment:", job.URL, "to", job.AbsolutePath)
+	// 	fmt.Println("-> Downloading segment:", job.URL, "to", job.AbsolutePath)
 	// }
 	defer func() {
 		if job.wg != nil {
@@ -474,11 +470,11 @@ func (w *Worker) downloadAudioSegment(job *WJob) {
 
 	audioF, err := downloadFile(job.URL, job.AbsolutePath)
 	if err != nil {
-		Logger.Println("Failed to download the audio segment file")
+		Logger.Printf("Failed to download the %s segment file\n", job.Type)
 		Logger.Println(err)
 	}
 	if Debug {
-		fmt.Printf("-> [W%d] done downloading audio segment [%d]\n", w.id, job.Pos)
+		fmt.Printf("-> [W%d] done downloading %s segment [%d]\n", w.id, job.Type, job.Pos)
 	}
 	audioF.Close()
 	job.Err = err

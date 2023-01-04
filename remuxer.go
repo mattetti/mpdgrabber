@@ -24,7 +24,7 @@ func FfmpegPath() (string, error) {
 	return strings.Trim(strings.Trim(string(buf), "\r\n"), "\n"), err
 }
 
-func Mux(outFilePath string, audioTracks []*OutputTrack) error {
+func Mux(outFilePath string, audioTracks []*OutputTrack, videoTracks []*OutputTrack) error {
 	ffmpegPath, err := FfmpegPath()
 	if err != nil {
 		Logger.Fatalf("ffmpeg wasn't found on your system, it is required to convert video files.\n" +
@@ -38,6 +38,14 @@ func Mux(outFilePath string, audioTracks []*OutputTrack) error {
 	trackNbr := 0
 	// add the audio files
 	for _, track := range audioTracks {
+		if fileExists(track.AbsolutePath) {
+			args = append(args, "-i", track.AbsolutePath)
+			trackNbr++
+		}
+	}
+
+	// add the video files
+	for _, track := range videoTracks {
 		if fileExists(track.AbsolutePath) {
 			args = append(args, "-i", track.AbsolutePath)
 			trackNbr++
@@ -89,7 +97,8 @@ func Mux(outFilePath string, audioTracks []*OutputTrack) error {
 	if !state.Success() {
 		Logger.Println("Error: something went wrong when trying to use ffmpeg")
 	} else {
-		for _, aFile := range audioTracks {
+		tracks := append(audioTracks, videoTracks...)
+		for _, aFile := range tracks {
 			err = os.Remove(aFile.AbsolutePath)
 			if err != nil {
 				Logger.Println("Couldn't delete temp file: " + aFile.AbsolutePath + "\n Please delete manually.\n")

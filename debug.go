@@ -78,7 +78,7 @@ func debugPrintRepresentation(baseURL *url.URL, contentType string, r *mpd.Repre
 		fmt.Println("\t\t# of Segment URLs:", len(segmentUrls))
 		for i, segmentURL := range segmentUrls {
 			segmentUrls[i] = absBaseURL(rURL, []string{segmentURL}).String()
-			fmt.Println("\t\tSegment URL:", segmentUrls[i])
+			// fmt.Println("\t\tSegment URL:", segmentUrls[i])
 		}
 	}
 

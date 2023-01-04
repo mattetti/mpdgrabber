@@ -5,7 +5,10 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
+	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -95,4 +98,50 @@ func Mux(outFilePath string, audioTracks []*AudioTrack) error {
 	}
 
 	return err
+}
+
+func reassembleFile(tempPath string, suffix string, outPath string, nbrSegments int) error {
+
+	// look for all files in path that start by the baseFilename and suffix
+	// for each file, open it and write it to the output file
+	files, err := filepath.Glob(tempPath + suffix + "*")
+	if err != nil {
+		return fmt.Errorf("failed to list files in %s - %w", tempPath, err)
+	}
+	if len(files) != nbrSegments {
+		Logger.Printf("expected %d files, got %d\n", nbrSegments, len(files))
+		Logger.Fatal("not enough files")
+	}
+
+	out, err := os.Create(outPath)
+	if err != nil {
+		return fmt.Errorf("failed to create %s - %w", outPath, err)
+	}
+	defer out.Close()
+
+	// sort the files using the suffix number
+	sort.Slice(files, func(i, j int) bool {
+		// find the last instance of suffix and extract the end of the the string
+		a, _ := strconv.Atoi(files[i][strings.LastIndex(files[i], suffix)+len(suffix):])
+		b, _ := strconv.Atoi(files[j][strings.LastIndex(files[j], suffix)+len(suffix):])
+		return a < b
+	})
+
+	for _, fPath := range files {
+		in, err := os.Open(fPath)
+		if err != nil {
+			return fmt.Errorf("failed to open %s - %w", fPath, err)
+		}
+		defer in.Close()
+		_, err = io.Copy(out, in)
+		if err != nil {
+			return fmt.Errorf("failed to copy %s to %s - %w", fPath, outPath, err)
+		}
+		err = os.Remove(fPath)
+		if err != nil {
+			return fmt.Errorf("failed to remove %s - %w", fPath, err)
+		}
+	}
+
+	return nil
 }

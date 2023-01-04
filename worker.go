@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -16,7 +17,7 @@ import (
 )
 
 var (
-	TotalWorkers         = 4
+	TotalWorkers         = 6
 	TmpFolder, _         = ioutil.TempDir("", "mpdgrabber")
 	filenameCleaner      = strings.NewReplacer("/", "-", "!", "", "?", "", ",", "")
 	AudioDownloadEnabled = true
@@ -37,6 +38,7 @@ const (
 	ListDL
 	VideoDL
 	AudioSegmentDL
+	AudioPartialSegmentDL
 	TextDL
 )
 
@@ -112,7 +114,7 @@ func (w *Worker) dispatch(job *WJob) {
 	case AudioSegmentDL:
 		job.wg.Add(1)
 		if Debug {
-			fmt.Println("-> Worker", w.id, "downloading audio segment", job.URL, "to", job.AbsolutePath)
+			fmt.Printf("-> [W%d] start downloading audio segment: [%d]\n", w.id, job.Pos)
 		}
 		w.downloadAudioSegment(job)
 	default:
@@ -275,6 +277,7 @@ func (w *Worker) downloadManifest(job *WJob) {
 
 			case "audio":
 				if isSegmentBase(r) {
+					// 1 big file for the entire representation, no need to assemble segments
 					audioFilename := filepath.Base(rBaseURL.Path)
 					path := filepath.Join(job.DestPath, audioFilename)
 					job := &WJob{
@@ -296,8 +299,93 @@ func (w *Worker) downloadManifest(job *WJob) {
 					}
 					audioTracks = append(audioTracks, at)
 				} else {
-					// TODO: support segment list and template
-					Logger.Printf("audio is not segment base, AS ID: %s, Rep ID: %s", strPtrtoS(adaptationSet.ID), strPtrtoS(r.ID))
+					// Segment list, raw or templated
+					if r.SegmentList != nil && r.SegmentList.SegmentURLs != nil && len(r.SegmentList.SegmentURLs) > 0 {
+						// raw segment list
+
+						// we use a dedicated to wait for the entire segment list to be downloaded
+						segWG := &sync.WaitGroup{}
+						audioFilename := filepath.Base(strPtrtoS(r.SegmentList.SegmentURLs[0].Media))
+						path := filepath.Join(job.DestPath, audioFilename)
+						// the audio track to reassemble
+						at := &AudioTrack{
+							RepresentationID: strPtrtoS(r.ID),
+							BaseURL:          rBaseURL.String(),
+							Language:         strPtrtoS(adaptationSet.Lang),
+							AbsolutePath:     path,
+							Codec:            strPtrtoS(r.Codecs),
+							SampleRate:       int64PtrToI(r.AudioSamplingRate),
+							Segmented:        true,
+						}
+						audioTracks = append(audioTracks, at)
+
+						for i, segURL := range r.SegmentList.SegmentURLs {
+							audioFilename = filepath.Base(strPtrtoS(segURL.Media)) + "_seg_" + strconv.Itoa(i)
+							path = filepath.Join(job.DestPath, audioFilename)
+
+							job := &WJob{
+								Type:         AudioPartialSegmentDL,
+								Pos:          i,
+								URL:          strPtrtoS(segURL.Media),
+								AbsolutePath: path,
+								Filename:     audioFilename,
+								wg:           segWG,
+							}
+							segChan <- job
+						}
+						segWG.Wait()
+						// TODO: assemble segments
+
+					} else if isTemplated(r) {
+						// templated segment list
+						segURLs := templatedSegments(rBaseURL, r)
+						if len(segURLs) > 0 {
+							suffix := "_seg_"
+							baseFilename := filepath.Base(segURLs[0]) + suffix
+							segWG := &sync.WaitGroup{}
+							for i, segurl := range segURLs {
+								audioFilename := baseFilename + strconv.Itoa(i)
+								path := filepath.Join(job.DestPath, audioFilename)
+
+								job := &WJob{
+									Type:         AudioSegmentDL,
+									Pos:          i,
+									URL:          segurl,
+									AbsolutePath: path,
+									Filename:     audioFilename,
+									wg:           segWG,
+								}
+								segChan <- job
+							}
+							segWG.Wait()
+
+							// the audio track to reassemble
+							audioFilename := baseFilename[:len(baseFilename)-5]
+							tempPathPattern := filepath.Join(job.DestPath, audioFilename)
+							path := tempPathPattern + guessedExtension(r)
+							err := reassembleFile(tempPathPattern, suffix, path, len(segURLs))
+							if err != nil {
+								job.Err = fmt.Errorf("error reassembling audio: %s - %v", path, err)
+								Logger.Println(job.Err)
+								return
+							}
+
+							at := &AudioTrack{
+								RepresentationID: strPtrtoS(r.ID),
+								BaseURL:          rBaseURL.String(),
+								Language:         strPtrtoS(adaptationSet.Lang),
+								AbsolutePath:     path,
+								Codec:            strPtrtoS(r.Codecs),
+								SampleRate:       int64PtrToI(r.AudioSamplingRate),
+								Segmented:        true,
+							}
+							audioTracks = append(audioTracks, at)
+						}
+
+					} else {
+						// TODO: support segment list and template
+						Logger.Printf("audio is not in a supported format, AS ID: %s, Rep ID: %s", strPtrtoS(adaptationSet.ID), strPtrtoS(r.ID))
+					}
 				}
 
 			case "text":
@@ -318,9 +406,9 @@ func (w *Worker) downloadManifest(job *WJob) {
 }
 
 func (w *Worker) downloadAudioSegment(job *WJob) {
-	if Debug {
-		fmt.Println("-> Downloading audio segment:", job.URL, "to", job.AbsolutePath)
-	}
+	// if Debug {
+	// 	fmt.Println("-> Downloading audio segment:", job.URL, "to", job.AbsolutePath)
+	// }
 	defer func() {
 		if job.wg != nil {
 			job.wg.Done()
@@ -333,7 +421,7 @@ func (w *Worker) downloadAudioSegment(job *WJob) {
 		Logger.Println(err)
 	}
 	if Debug {
-		fmt.Println("-> done with the download audio segment job", job.AbsolutePath)
+		fmt.Printf("-> [W%d] done downloading audio segment [%d]\n", w.id, job.Pos)
 	}
 	audioF.Close()
 	job.Err = err
@@ -451,6 +539,18 @@ func isSegmentBase(r *mpd.Representation) bool {
 	return true
 }
 
+func isTemplated(r *mpd.Representation) bool {
+	if r.SegmentTemplate != nil {
+		return true
+	}
+
+	if r.AdaptationSet != nil && r.AdaptationSet.SegmentTemplate != nil {
+		return true
+	}
+
+	return false
+}
+
 func shouldSkipLang(lang string) bool {
 	if lang == "" || lang == "und" || lang == UnknownString {
 		return false
@@ -514,4 +614,5 @@ type AudioTrack struct {
 	Codec            string
 	SampleRate       int
 	AbsolutePath     string
+	Segmented        bool
 }

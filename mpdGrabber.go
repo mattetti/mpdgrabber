@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime"
 	"net/http"
 	"net/url"
 	"os"
@@ -18,7 +19,48 @@ var Logger = log.New(os.Stdout, "", log.Ldate|log.Ltime|log.Lshortfile)
 
 const UnknownString = "unknown"
 
-// FIXME: we need to return a slice of structs to report the duration of each segment
+func templatedSegments(baseURL *url.URL, representation *mpd.Representation) (segmentUrls []string) {
+	if representation == nil {
+		if Debug {
+			fmt.Println("no representation to look for templated segments")
+		}
+		return
+	}
+	// I don't think you have 2 templates but the mpd format is bonkers... so maybe?
+	var template *mpd.SegmentTemplate
+	if representation.AdaptationSet != nil && representation.AdaptationSet.SegmentTemplate != nil {
+		template = representation.AdaptationSet.SegmentTemplate
+		if Debug {
+			fmt.Println("->using AdaptationSet.SegmentTemplate")
+		}
+	} else {
+		template = representation.SegmentTemplate
+		if Debug {
+			fmt.Println("->using Representation.SegmentTemplate")
+		}
+	}
+	if template == nil {
+		if Debug {
+			fmt.Println("no SegmentTemplate found")
+		}
+		return
+	}
+
+	segmentUrls = templateSubstitution(template.Initialization, representation)
+	if Debug && len(segmentUrls) > 0 {
+		fmt.Printf("templated Initialization url: %s\n", segmentUrls[0])
+	}
+	segmentUrls = append(segmentUrls, templateSubstitution(template.Media, representation)...)
+	if Debug {
+		fmt.Printf("Found templated segments %d\n", len(segmentUrls))
+	}
+	for i, segmentURL := range segmentUrls {
+		segmentUrls[i] = absBaseURL(baseURL, []string{segmentURL}).String()
+	}
+
+	return segmentUrls
+}
+
 func templateSubstitution(templateStr *string, representation *mpd.Representation) (urls []string) {
 	if templateStr == nil {
 		return urls
@@ -48,7 +90,6 @@ func templateSubstitution(templateStr *string, representation *mpd.Representatio
 		} else {
 			segTemplate = representation.SegmentTemplate
 		}
-		fmt.Printf("**%+v\n", segTemplate)
 
 		// segment timeline
 		if segTemplate.SegmentTimeline != nil {
@@ -56,24 +97,34 @@ func templateSubstitution(templateStr *string, representation *mpd.Representatio
 				fmt.Println("\t-> Segment timeline found")
 			}
 
-			segIndex := 0 // 0 by default, TODO: check specs to see if index 0 or 1
+			/* example
+					<S t="0" d="96256" r="2" />
+					<S d="95232" />
+					<S d="96256" r="2" />
+			    <S d="95232" />
+			*/
+
+			currentT := 0
+			duration := 0
 
 			for _, tlSeg := range segTemplate.SegmentTimeline.Segments {
-				// start time is the index of the first segment
 				if tlSeg.StartTime != nil {
-					segIndex = uint64PtrToI(tlSeg.StartTime)
+					currentT = uint64PtrToI(tlSeg.StartTime)
 				}
+				duration = int(tlSeg.Duration)
+				url := strings.Replace(template, "$Time$", strconv.Itoa(currentT), -1)
+				urls = append(urls, url)
+				currentT += duration
 
-				// handle repeat count if set
-				repeat := intPtrToI(tlSeg.RepeatCount)
-				if repeat == 0 {
-					repeat = 1
+				// repeat count if present
+				if tlSeg.RepeatCount != nil {
+					repeat := intPtrToI(tlSeg.RepeatCount)
+					for i := 0; i < repeat; i++ {
+						url := strings.Replace(template, "$Time$", strconv.Itoa(currentT), -1)
+						urls = append(urls, url)
+						currentT += duration
+					}
 				}
-				for i := 0; i < repeat; i++ {
-					url := strings.Replace(template, "$Time$", strconv.Itoa(segIndex+i), -1)
-					urls = append(urls, url)
-				}
-				segIndex += repeat
 			}
 
 		}
@@ -139,12 +190,6 @@ func downloadFile(url string, path string) (*os.File, error) {
 		return os.Open(path)
 	}
 
-	// Create the file
-	out, err := os.Create(path)
-	if err != nil {
-		return nil, err
-	}
-
 	// build the request with the proper headers
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
@@ -164,13 +209,70 @@ func downloadFile(url string, path string) (*os.File, error) {
 		return nil, fmt.Errorf("bad status: %s", resp.Status)
 	}
 
-	// Write the body to file
-	_, err = io.Copy(out, resp.Body)
+	// Create the file
+	out, err := os.Create(path)
 	if err != nil {
 		return nil, err
 	}
 
+	// Write the body to file
+	_, err = io.Copy(out, resp.Body)
+	if err != nil {
+		out.Close()
+		os.Remove(path)
+		return nil, err
+	}
+
 	return out, nil
+}
+
+func guessedExtension(r *mpd.Representation) string {
+	if r == nil {
+		return ""
+	}
+	// mimetype check first
+	mimeType := strPtrtoS(r.MimeType)
+	if mimeType == UnknownString && r.AdaptationSet != nil && r.AdaptationSet.MimeType != nil {
+		mimeType = strPtrtoS(r.AdaptationSet.MimeType)
+	}
+	if mimeType != UnknownString {
+		fmt.Println("checking mimetype", mimeType)
+		ext, err := mime.ExtensionsByType(mimeType)
+		if err == nil && len(ext) > 0 {
+			return ext[0]
+		}
+	}
+
+	// codec check next
+	codec := strPtrtoS(r.Codecs)
+	if codec == "" && r.AdaptationSet != nil && r.AdaptationSet.Codecs != nil {
+		codec = strPtrtoS(r.AdaptationSet.Codecs)
+	}
+	if codec != "" {
+		if strings.Contains(codec, "avc") {
+			return ".mp4"
+		}
+		if strings.Contains(codec, "mp4a") {
+			return ".mp4"
+		}
+		if strings.Contains(codec, "mp3") {
+			return ".mp3"
+		}
+		if strings.Contains(codec, "vorbis") {
+			return ".ogg"
+		}
+		if strings.Contains(codec, "opus") {
+			return ".opus"
+		}
+		if strings.Contains(codec, "vp9") {
+			return ".webm"
+		}
+		if strings.Contains(codec, "vp8") {
+			return ".webm"
+		}
+	}
+
+	return ""
 }
 
 func fileExists(path string) bool {

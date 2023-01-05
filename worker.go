@@ -172,6 +172,15 @@ func (w *Worker) downloadManifest(job *WJob) {
 	// if Debug {
 	Logger.Println("Downloading manifest file:", job.URL)
 	// }
+	defer func() {
+		if job.wg != nil {
+			job.wg.Done()
+			if Debug {
+				fmt.Println("-> done with the manifest download job")
+			}
+		}
+	}()
+
 	manifestPath := filepath.Join(TmpFolder, "manifest.mpd")
 	mpdF, err := downloadFile(job.URL, manifestPath)
 	if err != nil {
@@ -184,12 +193,6 @@ func (w *Worker) downloadManifest(job *WJob) {
 	defer func() {
 		mpdF.Close()
 		os.Remove(manifestPath)
-		if job.wg != nil {
-			job.wg.Done()
-			if Debug {
-				fmt.Println("-> done with the download manifest job")
-			}
-		}
 	}()
 
 	if Debug {

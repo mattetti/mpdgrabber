@@ -475,13 +475,7 @@ func downloadRepresentation(job *WJob, baseURL *url.URL, r *mpd.Representation, 
 				MediaType:        ContentTypeAudio,
 			}
 
-			// ffmpeg doesn't support ttml subtitles so we leave them as a separate file
-			if cType == ContentTypeText && filepath.Ext(outPath) == ".ttml" {
-				Logger.Println("FFmpeg doesn't support TTML subtitles, leaving them as a separate file:", outPath)
-			} else {
-				*outputTracks = append(*outputTracks, at)
-			}
-
+			*outputTracks = append(*outputTracks, at)
 		}
 	}
 }

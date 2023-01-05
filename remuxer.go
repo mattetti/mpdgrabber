@@ -60,9 +60,38 @@ func Mux(outFilePath string, audioTracks, videoTracks, textTracks []*OutputTrack
 
 	for _, track := range textTracks {
 		if fileExists(track.AbsolutePath) {
+
+			if filepath.Ext(track.AbsolutePath) == ".ttml" {
+				fmt.Println("TTML subtitles found, but they aren't supported by FFMpeg")
+				// convert the ttml to vtt
+				vttPath := track.AbsolutePath + ".vtt"
+				doc, err := ttml.Open(track.AbsolutePath)
+				if err != nil {
+					Logger.Printf("Error parsing %s as ttml: %v\n", track.AbsolutePath, err)
+					continue
+				}
+				if err = doc.SaveAsVTT(vttPath); err != nil {
+					Logger.Printf("Error converting %s from ttml to vtt: %v\n", track.AbsolutePath, err)
+					continue
+				}
+				fmt.Println("We converted them to VTT subs and left the .ttml file for you")
+				args = append(args, "-i", vttPath)
+				mapArgs = append(mapArgs, "-map", fmt.Sprintf("%d:s", trackNbr))
+				trackNbr++
+
+				ttmlFilePath := strings.TrimSuffix(outFilePath, filepath.Ext(outFilePath)) + ".ttml"
+				if err = os.Rename(track.AbsolutePath, ttmlFilePath); err != nil {
+					Logger.Printf("Error renaming %s to %s: %v\n", track.AbsolutePath, ttmlFilePath, err)
+				}
+
+				continue
+
+			}
+
 			args = append(args, "-i", track.AbsolutePath)
 			mapArgs = append(mapArgs, "-map", fmt.Sprintf("%d:s", trackNbr))
 			trackNbr++
+
 		}
 	}
 
@@ -77,8 +106,7 @@ func Mux(outFilePath string, audioTracks, videoTracks, textTracks []*OutputTrack
 	args = append(args,
 		"-vcodec", "copy",
 		"-acodec", "copy",
-		"-dcodec", "copy",
-		"-scodec", "mov_text",
+		"-scodec", "copy",
 	)
 
 	args = append(args, outFilePath)
@@ -112,6 +140,7 @@ func Mux(outFilePath string, audioTracks, videoTracks, textTracks []*OutputTrack
 		Logger.Println("Error: something went wrong when trying to use ffmpeg")
 	} else {
 		tracks := append(audioTracks, videoTracks...)
+		// tracks = append(tracks, textTracks...)
 		for _, aFile := range tracks {
 			err = os.Remove(aFile.AbsolutePath)
 			if err != nil {

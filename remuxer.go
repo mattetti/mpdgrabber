@@ -64,7 +64,8 @@ func Mux(outFilePath string, audioTracks, videoTracks, textTracks []*OutputTrack
 			if filepath.Ext(track.AbsolutePath) == ".ttml" {
 				fmt.Println("TTML subtitles found, but they aren't supported by FFMpeg")
 				// convert the ttml to vtt
-				vttPath := track.AbsolutePath + ".vtt"
+				outfileNameNoExt := strings.TrimSuffix(outFilePath, filepath.Ext(outFilePath))
+				vttPath := outfileNameNoExt + ".vtt"
 				doc, err := ttml.Open(track.AbsolutePath)
 				if err != nil {
 					Logger.Printf("Error parsing %s as ttml: %v\n", track.AbsolutePath, err)
@@ -79,13 +80,12 @@ func Mux(outFilePath string, audioTracks, videoTracks, textTracks []*OutputTrack
 				mapArgs = append(mapArgs, "-map", fmt.Sprintf("%d:s", trackNbr))
 				trackNbr++
 
-				ttmlFilePath := strings.TrimSuffix(outFilePath, filepath.Ext(outFilePath)) + ".ttml"
+				ttmlFilePath := outfileNameNoExt + ".ttml"
 				if err = os.Rename(track.AbsolutePath, ttmlFilePath); err != nil {
 					Logger.Printf("Error renaming %s to %s: %v\n", track.AbsolutePath, ttmlFilePath, err)
 				}
 
 				continue
-
 			}
 
 			args = append(args, "-i", track.AbsolutePath)

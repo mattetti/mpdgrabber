@@ -363,7 +363,7 @@ func downloadRepresentation(job *WJob, baseURL *url.URL, r *mpd.Representation, 
 	if isSegmentBase(r) {
 		// 1 big file for the entire representation, no need to assemble segments
 		outFilename := filepath.Base(baseURL.Path)
-		outPath := filepath.Join(job.DestPath, outFilename)
+		outPath := filepath.Join(TmpFolder, outFilename)
 		var jobType WJobType
 		switch cType {
 		case ContentTypeAudio:
@@ -420,7 +420,7 @@ func downloadRepresentation(job *WJob, baseURL *url.URL, r *mpd.Representation, 
 			Logger.Printf("(%d %s segments)\n", nbrSegments, cType)
 			for i, segURL := range r.SegmentList.SegmentURLs {
 				outFilename = tmpFilenamePattern + strconv.Itoa(i)
-				path = filepath.Join(job.DestPath, outFilename)
+				path = filepath.Join(TmpFolder, outFilename)
 
 				job := &WJob{
 					Type:         jobType,
@@ -446,7 +446,7 @@ func downloadRepresentation(job *WJob, baseURL *url.URL, r *mpd.Representation, 
 
 				for i, segurl := range segURLs {
 					outFilename := tmpFilenamePattern + strconv.Itoa(i)
-					path := filepath.Join(job.DestPath, outFilename)
+					path := filepath.Join(TmpFolder, outFilename)
 
 					job := &WJob{
 						Type:         jobType,
@@ -466,7 +466,7 @@ func downloadRepresentation(job *WJob, baseURL *url.URL, r *mpd.Representation, 
 			if nbrSegments > 0 {
 				outFilename := tmpFilenamePattern[:len(tmpFilenamePattern)-5]
 				// the track to reassemble
-				tempPathPattern := filepath.Join(job.DestPath, outFilename)
+				tempPathPattern := filepath.Join(TmpFolder, outFilename)
 				ext := guessedExtension(r)
 				outPath = tempPathPattern + ext
 				Logger.Printf("Reconstructing sub %s file: %s\n", cType, filepath.Base(outPath))

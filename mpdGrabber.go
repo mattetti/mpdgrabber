@@ -277,6 +277,14 @@ func guessedExtension(r *mpd.Representation) string {
 			return ".vtt"
 		}
 
+		if strings.Contains(codec, "wvtt") {
+			return ".vtt"
+		}
+
+		if strings.Contains(codec, "vtt") {
+			return ".vtt"
+		}
+
 		if strings.Contains(codec, "avc") {
 			return ".mp4"
 		}

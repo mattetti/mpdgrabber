@@ -1,6 +1,8 @@
 package mpdgrabber
 
 import (
+	"bytes"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"os"
@@ -179,6 +181,7 @@ func reassembleFile(tempPath string, suffix string, outPath string, nbrSegments 
 	})
 
 	TTMLFlag := -1
+	webVTT := -1
 	var ttmlDoc *ttml.Document
 
 	for _, fPath := range files {
@@ -196,15 +199,6 @@ func reassembleFile(tempPath string, suffix string, outPath string, nbrSegments 
 				return fmt.Errorf("failed to parse atoms in %s - %w", fPath, err)
 			}
 			for _, atom := range atoms {
-				// comment out the following if you don't want to print the styp atom (debugging)
-				// if atom.Type() == mp4.STYP {
-				// 	// print the styp atom
-				// 	data, err := atom.ParseSTYP()
-				// 	if err != nil {
-				// 		panic(fmt.Sprintf("failed to parse styp atom in %s - %v", fPath, err))
-				// 	}
-				// 	fmt.Printf("styp: %s\n", data)
-				// }
 
 				if atom.Type() == mp4.MDAT {
 
@@ -217,12 +211,30 @@ func reassembleFile(tempPath string, suffix string, outPath string, nbrSegments 
 							// 	fmt.Println("ttml content found")
 							// }
 							TTMLFlag = 1
+							webVTT = 0
 						} else {
 							TTMLFlag = 0
 							// write the atom to the output file
+
+							// check if webvtt
+							// 4 bytes, unsigned be int, 0x00000000
+							// vtt - 0x76 0x74 0x74
+							if (len(atom.Data) > 7) &&
+								(atom.Data[4] == 0x76) &&
+								(atom.Data[5] == 0x74) &&
+								(atom.Data[6] == 0x74) {
+								if Debug {
+									fmt.Println("-> webvtt content found")
+								}
+								webVTT = 1
+							} else {
+								webVTT = 0
+							}
+
 						}
 					}
 
+					// ttml assembling
 					if TTMLFlag == 1 {
 						if ttmlDoc == nil {
 							ttmlDoc, err = ttml.New(atom.Data)
@@ -233,10 +245,27 @@ func reassembleFile(tempPath string, suffix string, outPath string, nbrSegments 
 							ttmlDoc.MergeFromData(atom.Data)
 						}
 					} else {
-						fmt.Println("non TTLM subtitles might not work")
-						_, err = atom.Write(out)
-						if err != nil {
-							return fmt.Errorf("failed to write atom to %s - %w", outPath, err)
+						// webvtt assembling
+						if webVTT == 1 {
+							// parse the webvtt binary file, convert it to a string, write it to out
+							data, err := extractAtomWebVTT(atom.Data)
+							fmt.Println(string(data))
+							if err != nil {
+								return fmt.Errorf("failed to extract binary webvtt from %s - %w", fPath, err)
+							}
+							// write data to out
+							_, err = out.Write(data)
+							if err != nil {
+								return fmt.Errorf("failed to write data to %s - %w", outPath, err)
+							}
+
+						} else {
+							// just adding things up
+							// fmt.Println("non TTLM subtitles might not work")
+							_, err = atom.Write(out)
+							if err != nil {
+								return fmt.Errorf("failed to write atom to %s - %w", outPath, err)
+							}
 						}
 					}
 				}
@@ -255,6 +284,7 @@ func reassembleFile(tempPath string, suffix string, outPath string, nbrSegments 
 			return fmt.Errorf("failed to remove %s - %w", fPath, err)
 		}
 	}
+
 	if TTMLFlag == 1 && ttmlDoc != nil {
 		if err = ttmlDoc.Write(out); err != nil {
 			return fmt.Errorf("failed to write ttmlDoc to %s - %w", outPath, err)
@@ -262,4 +292,64 @@ func reassembleFile(tempPath string, suffix string, outPath string, nbrSegments 
 	}
 
 	return nil
+}
+
+func extractAtomWebVTT(buf []byte) ([]byte, error) {
+	const boxHeaderSize = uint32(8)
+
+	if len(buf) < 16 {
+		return []byte{}, fmt.Errorf("buffer too small")
+	}
+
+	var boxSize uint32
+	var data []byte
+	boxType := make([]byte, 4)
+
+	r := bytes.NewReader(buf)
+	var err error
+
+	for err == nil {
+		// Read the box size
+		err := binary.Read(r, binary.BigEndian, &boxSize)
+		_, err = r.Read(boxType)
+		if err != nil {
+			break
+		}
+
+		// if vttc, parse the cue box
+		if bytes.Equal(boxType, []byte("vttc")) {
+			if r.Len() < int(boxHeaderSize) {
+				fmt.Println("vttc box too small")
+				break
+			}
+			err = binary.Read(r, binary.BigEndian, &boxSize)
+			_, err = r.Read(boxType)
+			// if payload is a cue box
+			if bytes.Equal(boxType, []byte("payl")) {
+				size := boxSize - boxHeaderSize
+				boxdata := make([]byte, size)
+				err := binary.Read(r, binary.BigEndian, &boxdata)
+				if err != nil {
+					break
+				}
+				data = append(data, boxdata...)
+			} else {
+				// skip
+				r.Seek(int64(boxSize-boxHeaderSize), io.SeekCurrent)
+			}
+		} else {
+			// skip
+			r.Seek(int64(boxSize-boxHeaderSize), io.SeekCurrent)
+		}
+
+		if r.Len() == 0 {
+			break
+		}
+	}
+
+	if err == io.EOF {
+		err = nil
+	}
+
+	return data, err
 }

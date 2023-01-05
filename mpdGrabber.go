@@ -200,10 +200,17 @@ func extractContentType(contentType, mimeType *string) string {
 	return UnknownString
 }
 
+func downloadFile(url string, path string) (*os.File, error) {
+	return downloadFileWithClient(http.DefaultClient, url, path)
+}
+
 // downloadFile downloads a file from a given url and saves it to a given path
 // it returns the file and an error if something goes wrong
 // It's the caller's responsibility to close the file.
-func downloadFile(url string, path string) (*os.File, error) {
+func downloadFileWithClient(client *http.Client, url string, path string) (*os.File, error) {
+	if client == nil {
+		client = http.DefaultClient
+	}
 
 	// check if there is a valid file at `path`
 	if fileExists(path) {
@@ -220,8 +227,7 @@ func downloadFile(url string, path string) (*os.File, error) {
 	}
 	// req.Header.Add("Accept", "application/dash+xml,video/vnd.mpeg.dash.mpd")
 
-	// call the request
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -229,7 +235,8 @@ func downloadFile(url string, path string) (*os.File, error) {
 
 	// Check server response
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("bad status: %s", resp.Status)
+		err := fmt.Errorf("bad status: %s", resp.Status)
+		return nil, err
 	}
 
 	// Create the file

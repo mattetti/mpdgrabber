@@ -182,7 +182,23 @@ func (w *Worker) downloadManifest(job *WJob) {
 	}()
 
 	manifestPath := filepath.Join(TmpFolder, "manifest.mpd")
-	mpdF, err := downloadFile(job.URL, manifestPath)
+
+	// create a custom http client to track and follow redirects
+	// and pass it to the download function
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if req.Response != nil {
+				rURL, err := req.Response.Location()
+				if err == nil {
+					job.URL = rURL.String()
+					Logger.Println("manifest redirected to:", job.URL)
+				}
+			}
+			return nil
+		},
+	}
+
+	mpdF, err := downloadFileWithClient(client, job.URL, manifestPath)
 	if err != nil {
 		Logger.Println("failed to download the manifest file")
 		Logger.Println(err)

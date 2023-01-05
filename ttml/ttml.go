@@ -340,9 +340,12 @@ func (doc *Document) ToVTT(w io.Writer) error {
 			}
 			for _, span := range p.Span {
 				// fmt.Println("->", strings.TrimSpace(span.Text))
-				if _, err := w.Write([]byte(strings.TrimSpace(span.Text) + "\n\n")); err != nil {
+				if _, err := w.Write([]byte(strings.TrimSpace(span.Text) + "\n")); err != nil {
 					return err
 				}
+			}
+			if _, err := w.Write([]byte("\n")); err != nil {
+				return err
 			}
 		}
 	}

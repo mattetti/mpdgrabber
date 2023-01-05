@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	"os"
 	"strings"
 )
 
@@ -49,6 +48,24 @@ func (d *Document) MarshalXML(e *xml.Encoder, start xml.StartElement) error {
 type Style struct {
 	Attrs []xml.Attr `xml:",attr"`
 }
+
+func (s *Style) GetAttr(attrName string) string {
+	for _, attr := range s.Attrs {
+		if attr.Name.Local == attrName {
+			return attr.Value
+		}
+	}
+	// case insensitive lookup
+	lcAttrName := strings.ToLower(attrName)
+	for _, attr := range s.Attrs {
+		if strings.ToLower(attr.Name.Local) == lcAttrName {
+			return attr.Value
+		}
+	}
+
+	return ""
+}
+
 type Division struct {
 	Region     string      `xml:"region,attr"`
 	Paragraphs []Paragraph `xml:"p"`
@@ -322,49 +339,4 @@ func (doc *Document) MergeFromData(data []byte) *Document {
 	}
 
 	return doc.Merge(&ttml)
-}
-
-// ToVTT writes the TTML document to the specified writer in WebVTT format.
-func (doc *Document) ToVTT(w io.Writer) error {
-	// Write the WebVTT file signature.
-	if _, err := w.Write([]byte("WEBVTT\n\n")); err != nil {
-		return err
-	}
-
-	// Iterate over the paragraphs.
-	for _, division := range doc.Body.Divisions {
-		for _, p := range division.Paragraphs {
-			// Write the start and end times.
-			if _, err := w.Write([]byte(p.Begin + " --> " + p.End + "\n")); err != nil {
-				return err
-			}
-			for _, span := range p.Span {
-				// fmt.Println("->", strings.TrimSpace(span.Text))
-				if _, err := w.Write([]byte(strings.TrimSpace(span.Text) + "\n")); err != nil {
-					return err
-				}
-			}
-			if _, err := w.Write([]byte("\n")); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-// SaveAsVTT saves the TTML document to the specified file in WebVTT format.
-// This is a convenience method that calls ToVTT internally.
-func (doc *Document) SaveAsVTT(outPath string) error {
-	// Open the output file.
-	f, err := os.Create(outPath)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	// Convert the document to WebVTT and write it to the output file.
-	if err := doc.ToVTT(f); err != nil {
-		return err
-	}
-	return nil
 }

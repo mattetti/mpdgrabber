@@ -256,16 +256,26 @@ func downloadFileWithClient(client *http.Client, url string, path string) (*os.F
 	return out, nil
 }
 
+func repCodecs(r *mpd.Representation) string {
+	if r == nil {
+		return UnknownString
+	}
+
+	codecs := strPtrtoS(r.Codecs)
+	if codecs == UnknownString && r.AdaptationSet != nil && r.AdaptationSet.Codecs != nil {
+		codecs = strPtrtoS(r.AdaptationSet.Codecs)
+	}
+	return codecs
+}
+
 func guessedExtension(r *mpd.Representation) string {
 	if r == nil {
 		return ""
 	}
 
 	// codec check first (especially because of text streams)
-	codec := strPtrtoS(r.Codecs)
-	if codec == UnknownString && r.AdaptationSet != nil && r.AdaptationSet.Codecs != nil {
-		codec = strPtrtoS(r.AdaptationSet.Codecs)
-	}
+	codec := repCodecs(r)
+
 	if codec != UnknownString {
 		// stpp is a text stream
 		if strings.Contains(codec, "stpp") {

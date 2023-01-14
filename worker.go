@@ -489,7 +489,7 @@ func downloadRepresentation(job *WJob, baseURL *url.URL, r *mpd.Representation, 
 				BaseURL:          baseURL.String(),
 				Language:         strPtrtoS(r.AdaptationSet.Lang),
 				AbsolutePath:     outPath,
-				Codec:            strPtrtoS(r.Codecs),
+				Codec:            repCodecs(r),
 				SampleRate:       int64PtrToI(r.AudioSamplingRate),
 				MediaType:        ContentTypeAudio,
 			}

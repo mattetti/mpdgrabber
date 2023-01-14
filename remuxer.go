@@ -3,6 +3,7 @@ package mpdgrabber
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -13,8 +14,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/mattetti/mpdgrabber/mp4"
-	"github.com/mattetti/mpdgrabber/ttml"
+	"github.com/abema/go-mp4"
+	"github.com/mattetti/mpdgrabber/subs"
 )
 
 func FfmpegPath() (string, error) {
@@ -62,13 +63,13 @@ func Mux(outFilePath string, audioTracks, videoTracks, textTracks []*OutputTrack
 
 	for _, track := range textTracks {
 		if fileExists(track.AbsolutePath) {
+			outfileNameNoExt := strings.TrimSuffix(outFilePath, filepath.Ext(outFilePath))
 
 			if filepath.Ext(track.AbsolutePath) == ".ttml" {
 				fmt.Println("TTML subtitles found, but they aren't supported by FFMpeg")
 				// convert the ttml to vtt
-				outfileNameNoExt := strings.TrimSuffix(outFilePath, filepath.Ext(outFilePath))
 				vttPath := outfileNameNoExt + ".vtt"
-				doc, err := ttml.Open(track.AbsolutePath)
+				doc, err := subs.OpenTtml(track.AbsolutePath)
 				if err != nil {
 					Logger.Printf("Error parsing %s as ttml: %v\n", track.AbsolutePath, err)
 					continue
@@ -90,7 +91,13 @@ func Mux(outFilePath string, audioTracks, videoTracks, textTracks []*OutputTrack
 				continue
 			}
 
-			args = append(args, "-i", track.AbsolutePath)
+			// provide a copy of the file even if it's embedded in the container
+			subFilePath := outfileNameNoExt + filepath.Ext(track.AbsolutePath)
+			if err = os.Rename(track.AbsolutePath, subFilePath); err != nil {
+				Logger.Printf("Error renaming %s to %s: %v\n", track.AbsolutePath, subFilePath, err)
+			}
+
+			args = append(args, "-i", subFilePath)
 			mapArgs = append(mapArgs, "-map", fmt.Sprintf("%d:s", trackNbr))
 			trackNbr++
 
@@ -181,10 +188,16 @@ func reassembleFile(tempPath string, suffix string, outPath string, nbrSegments 
 	})
 
 	TTMLFlag := -1
-	webVTT := -1
-	var ttmlDoc *ttml.Document
+	// webVTT := -1
+	var ttmlDoc *subs.TtmlDocument
+	var sawVTT bool
+	var language string
+	var trackID uint32
+	var trackCues []string
+	var timescale uint32
 
 	for _, fPath := range files {
+
 		in, err := os.Open(fPath)
 		if err != nil {
 			return fmt.Errorf("failed to open %s - %w", fPath, err)
@@ -194,84 +207,146 @@ func reassembleFile(tempPath string, suffix string, outPath string, nbrSegments 
 		// dealing with text files differently
 		// we write the data to the file, removing the mp4 encapsulation
 		if cType == ContentTypeText {
-			atoms, err := mp4.ParseAtoms(in)
-			if err != nil {
-				return fmt.Errorf("failed to parse atoms in %s - %w", fPath, err)
-			}
-			for _, atom := range atoms {
+			var baseTime int
+			var defaultSampleDuration uint32
+			var currentTime int
+			var trun *mp4.Trun
 
-				if atom.Type() == mp4.MDAT {
+			// fmt.Println(fPath)
+			_, err = mp4.ReadBoxStructure(in, func(h *mp4.ReadHandle) (interface{}, error) {
+				switch h.Path[0] {
+				case mp4.BoxTypeMoov():
+					tkhds, err := mp4.ExtractBoxWithPayload(in, &h.BoxInfo, mp4.BoxPath{mp4.BoxTypeTrak(), mp4.BoxTypeTkhd()})
+					if err != nil {
+						return nil, err
+					}
+					if len(tkhds) == 0 {
+						return nil, errors.New("tkhd box not found")
+					}
+					tkhd := tkhds[0].Payload.(*mp4.Tkhd)
+					trackID = tkhd.TrackID
 
-					if TTMLFlag == -1 {
-						// peak atom.Data and check if it starts by "<?xml"
-						// if it does, it's a ttml file
-						// if it doesn't, it's a webvtt file
-						if (len(atom.Data) > 5) && strings.Contains(string(atom.Data[:5]), "<?xml") {
-							// if Debug {
-							// 	fmt.Println("ttml content found")
-							// }
-							TTMLFlag = 1
-							webVTT = 0
-						} else {
-							TTMLFlag = 0
-							// write the atom to the output file
-
-							// check if webvtt
-							// 4 bytes, unsigned be int, 0x00000000
-							// vtt - 0x76 0x74 0x74
-							if (len(atom.Data) > 7) &&
-								(atom.Data[4] == 0x76) &&
-								(atom.Data[5] == 0x74) &&
-								(atom.Data[6] == 0x74) {
-								if Debug {
-									fmt.Println("-> webvtt content found")
-								}
-								webVTT = 1
-							} else {
-								webVTT = 0
-							}
-
-						}
+					mdhds, err := mp4.ExtractBoxWithPayload(in, &h.BoxInfo,
+						mp4.BoxPath{mp4.BoxTypeTrak(), mp4.BoxTypeMdia(), mp4.BoxTypeMdhd()})
+					if err != nil {
+						return nil, err
+					}
+					if len(mdhds) == 0 {
+						return nil, errors.New("mdhd box not found")
+					}
+					mdhd := mdhds[0].Payload.(*mp4.Mdhd)
+					if mdhd.Timescale != 0 {
+						timescale = mdhd.Timescale
 					}
 
-					// ttml assembling
-					if TTMLFlag == 1 {
-						if ttmlDoc == nil {
-							ttmlDoc, err = ttml.New(atom.Data)
-							if err != nil {
-								Logger.Println("something wrong happened when parsing the ttml data", err)
-							}
-						} else {
-							ttmlDoc.MergeFromData(atom.Data)
-						}
-					} else {
-						// webvtt assembling
-						if webVTT == 1 {
-							// parse the webvtt binary file, convert it to a string, write it to out
-							data, err := extractAtomWebVTT(atom.Data)
-							fmt.Println(string(data))
-							if err != nil {
-								return fmt.Errorf("failed to extract binary webvtt from %s - %w", fPath, err)
-							}
-							// write data to out
-							_, err = out.Write(data)
-							if err != nil {
-								return fmt.Errorf("failed to write data to %s - %w", outPath, err)
-							}
+					for i, _ := range mdhd.Language {
+						mdhd.Language[i] += 0x60
+					}
+					l := string(mdhd.Language[:])
+					if l != "" {
+						language = string(mdhd.Language[:])
+					}
 
-						} else {
-							// just adding things up
-							// fmt.Println("non TTLM subtitles might not work")
-							_, err = atom.Write(out)
-							if err != nil {
-								return fmt.Errorf("failed to write atom to %s - %w", outPath, err)
+					// fmt.Println(">> Track", trackID, "language:", language, "timescale", timescale)
+
+					stsds, err := mp4.ExtractBoxWithPayload(in, &h.BoxInfo, mp4.BoxPath{
+						mp4.BoxTypeTrak(),
+						mp4.BoxTypeMdia(),
+						mp4.BoxTypeMinf(),
+						mp4.BoxTypeStbl(),
+						mp4.BoxTypeStsd(),
+					})
+					if err != nil {
+						fmt.Println(err)
+						return nil, err
+					}
+					if len(stsds) == 0 {
+						fmt.Println("no stsd box")
+						return nil, errors.New("stsd box not found")
+					}
+					wvtts, err := mp4.ExtractBox(in, &stsds[0].Info, mp4.BoxPath{mp4.StrToBoxType("wvtt")})
+					if len(wvtts) > 0 {
+						sawVTT = true
+					}
+
+				case mp4.BoxTypeMoof():
+					trun = nil
+
+					// extract tfdt box
+					tfdts, err := mp4.ExtractBoxWithPayload(in, &h.BoxInfo, mp4.BoxPath{mp4.BoxTypeTraf(), mp4.BoxTypeTfdt()})
+					if err != nil {
+						return nil, err
+					}
+					if len(tfdts) == 0 {
+						return nil, errors.New("tfdt box not found")
+					}
+					tfdt := tfdts[0].Payload.(*mp4.Tfdt)
+					if tfdt.Version < 0 || tfdt.Version > 1 {
+						return nil, errors.New("TFDT version can only be 0 or 1")
+					}
+					baseTime = int(tfdt.GetBaseMediaDecodeTime())
+
+					// Extract tfhd box
+					tfhds, err := mp4.ExtractBoxWithPayload(in, &h.BoxInfo, mp4.BoxPath{mp4.BoxTypeTraf(), mp4.BoxTypeTfhd()})
+					if err != nil {
+						return nil, err
+					}
+					if len(tfhds) == 0 {
+						return nil, errors.New("tfdt box not found")
+					}
+					tfhd := tfhds[0].Payload.(*mp4.Tfhd)
+					defaultSampleDuration = tfhd.DefaultSampleDuration
+
+					truns, err := mp4.ExtractBoxWithPayload(in, &h.BoxInfo, mp4.BoxPath{mp4.BoxTypeTraf(), mp4.BoxTypeTrun()})
+					if err != nil {
+						return nil, err
+					}
+					if len(truns) > 0 {
+						trun = truns[0].Payload.(*mp4.Trun)
+					}
+
+				case mp4.BoxTypeMdat():
+					if sawVTT {
+						currentTime = baseTime
+						w := NewByteWriter(int(h.BoxInfo.Size))
+						_, err := io.Copy(w, in)
+						if err != nil {
+							fmt.Println("failed to copy mdata", err)
+						}
+						cues, err := extractAtomWebVTT(w.Buf)
+						for i, presentation := range trun.Entries {
+							if i >= len(cues) {
+								break
 							}
+							duration := presentation.SampleDuration
+							if duration == 0 {
+								duration = defaultSampleDuration
+							}
+							startTime := 0
+							tOffset := trun.GetSampleCompositionTimeOffset(i)
+							if tOffset > 0 {
+								startTime = int(baseTime) + int(tOffset)
+							} else {
+								startTime = currentTime
+							}
+							currentTime = startTime + int(duration)
+							cueStart := startTime
+							cueEnd := currentTime
+							if timescale > 0 {
+								cueStart /= int(timescale)
+								cueEnd /= int(timescale)
+							}
+							trackCues = append(trackCues,
+								fmt.Sprintf("%s --> %s\n%s\n",
+									subs.WebvttTimeString(cueStart),
+									subs.WebvttTimeString(cueEnd), cues[i]))
 						}
 					}
 				}
-			}
-		} else {
+				return nil, nil
+			})
 
+		} else {
 			// copy the file to the output file as is
 			_, err = io.Copy(out, in)
 			if err != nil {
@@ -283,9 +358,14 @@ func reassembleFile(tempPath string, suffix string, outPath string, nbrSegments 
 		if err != nil {
 			return fmt.Errorf("failed to remove %s - %w", fPath, err)
 		}
-	}
 
-	if TTMLFlag == 1 && ttmlDoc != nil {
+	}
+	if sawVTT {
+		fmt.Fprintf(out, "WEBVTT - mpdGrabber TrackID: %d - Language: %s\n\n", trackID, language)
+		for _, cue := range trackCues {
+			fmt.Fprintln(out, cue)
+		}
+	} else if TTMLFlag == 1 && ttmlDoc != nil {
 		if err = ttmlDoc.Write(out); err != nil {
 			return fmt.Errorf("failed to write ttmlDoc to %s - %w", outPath, err)
 		}
@@ -294,15 +374,16 @@ func reassembleFile(tempPath string, suffix string, outPath string, nbrSegments 
 	return nil
 }
 
-func extractAtomWebVTT(buf []byte) ([]byte, error) {
+func extractAtomWebVTT(buf []byte) ([]string, error) {
 	const boxHeaderSize = uint32(8)
 
 	if len(buf) < 16 {
-		return []byte{}, fmt.Errorf("buffer too small")
+		return []string{}, fmt.Errorf("buffer too small")
 	}
 
 	var boxSize uint32
 	var data []byte
+	var cues []string
 	boxType := make([]byte, 4)
 
 	r := bytes.NewReader(buf)
@@ -333,7 +414,9 @@ func extractAtomWebVTT(buf []byte) ([]byte, error) {
 					break
 				}
 				data = append(data, boxdata...)
+				cues = append(cues, string(boxdata))
 			} else {
+				fmt.Println("can't process box type: ", string(boxType))
 				// skip
 				r.Seek(int64(boxSize-boxHeaderSize), io.SeekCurrent)
 			}
@@ -351,5 +434,105 @@ func extractAtomWebVTT(buf []byte) ([]byte, error) {
 		err = nil
 	}
 
-	return data, err
+	return cues, err
 }
+
+func NewByteWriter(size int) *BytesWriter {
+	return &BytesWriter{
+		Size: size,
+	}
+}
+
+type BytesWriter struct {
+	Size int
+	Buf  []byte
+}
+
+func (bw *BytesWriter) Write(p []byte) (n int, err error) {
+	if len(p) < bw.Size {
+		bw.Buf = p
+	} else {
+		bw.Buf = p[:bw.Size]
+	}
+	return len(bw.Buf), nil
+}
+
+/*
+// TODELETE
+				atoms, err := mp4.ParseAtoms(in)
+				if err != nil {
+					return fmt.Errorf("failed to parse atoms in %s - %w", fPath, err)
+				}
+				for _, atom := range atoms {
+
+					if atom.Type() == mp4.MDAT {
+
+						if TTMLFlag == -1 {
+							// peak atom.Data and check if it starts by "<?xml"
+							// if it does, it's a ttml file
+							// if it doesn't, it's a webvtt file
+							if (len(atom.Data) > 5) && strings.Contains(string(atom.Data[:5]), "<?xml") {
+								// if Debug {
+								// 	fmt.Println("ttml content found")
+								// }
+								TTMLFlag = 1
+								webVTT = 0
+							} else {
+								TTMLFlag = 0
+								// write the atom to the output file
+
+								// check if webvtt
+								// 4 bytes, unsigned be int, 0x00000000
+								// vtt - 0x76 0x74 0x74
+								if (len(atom.Data) > 7) &&
+									(atom.Data[4] == 0x76) &&
+									(atom.Data[5] == 0x74) &&
+									(atom.Data[6] == 0x74) {
+									if Debug {
+										fmt.Println("-> webvtt content found")
+									}
+									webVTT = 1
+								} else {
+									webVTT = 0
+								}
+
+							}
+						}
+
+						// ttml assembling
+						if TTMLFlag == 1 {
+							if ttmlDoc == nil {
+								ttmlDoc, err = ttml.New(atom.Data)
+								if err != nil {
+									Logger.Println("something wrong happened when parsing the ttml data", err)
+								}
+							} else {
+								ttmlDoc.MergeFromData(atom.Data)
+							}
+						} else {
+							// webvtt assembling
+							if webVTT == 1 {
+								// parse the webvtt binary file, convert it to a string, write it to out
+								data, err := extractAtomWebVTT(atom.Data)
+								fmt.Println(string(data))
+								if err != nil {
+									return fmt.Errorf("failed to extract binary webvtt from %s - %w", fPath, err)
+								}
+								// write data to out
+								_, err = out.Write(data)
+								if err != nil {
+									return fmt.Errorf("failed to write data to %s - %w", outPath, err)
+								}
+
+							} else {
+								// just adding things up
+								// fmt.Println("non TTLM subtitles might not work")
+								_, err = atom.Write(out)
+								if err != nil {
+									return fmt.Errorf("failed to write atom to %s - %w", outPath, err)
+								}
+							}
+						}
+					}
+				}
+*/

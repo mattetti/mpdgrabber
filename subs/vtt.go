@@ -1,11 +1,15 @@
 package subs
 
 import (
+	"bytes"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"math"
 	"os"
 	"strings"
+
+	"github.com/abema/go-mp4"
 )
 
 // ToVTT writes the TTML document to the specified writer in WebVTT format.
@@ -222,4 +226,134 @@ func WebvttTimeString(time int) string {
 	seconds := int(math.Floor(math.Mod(timeF, 60)))
 	milliseconds := int(math.Floor(math.Mod((timeF * 1000), 1000.0)))
 	return fmt.Sprintf("%02d:%02d:%02d.%03d", hours, minutes, seconds, milliseconds)
+}
+
+type VTTCueBoxContent struct {
+	Size    int
+	Content string
+}
+
+// ExtractAtomWebVTT extracts the WebVTT cues from an mp4 atom buffer
+// timestamps are missing and should be capture using the trun box entries.
+func ExtractAtomWebVTT(buf []byte) ([]VTTCueBoxContent, error) {
+	const boxHeaderSize = uint32(8)
+
+	if len(buf) < 16 {
+		return []VTTCueBoxContent{}, fmt.Errorf("buffer too small")
+	}
+
+	var boxSize uint32
+	var data []byte
+	var cues []VTTCueBoxContent
+	boxType := make([]byte, 4)
+
+	r := bytes.NewReader(buf)
+	var err error
+
+	for err == nil {
+		// Read the box size
+		err := binary.Read(r, binary.BigEndian, &boxSize)
+		_, err = r.Read(boxType)
+		if err != nil {
+			break
+		}
+
+		// if vttc, parse the cue box
+		if bytes.Equal(boxType, []byte("vttc")) {
+			if r.Len() < int(boxHeaderSize) {
+				fmt.Println("vttc box too small")
+				break
+			}
+			err = binary.Read(r, binary.BigEndian, &boxSize)
+			_, err = r.Read(boxType)
+			// if payload is a cue box
+			if bytes.Equal(boxType, []byte("payl")) {
+				size := boxSize - boxHeaderSize
+				boxdata := make([]byte, size)
+				err := binary.Read(r, binary.BigEndian, &boxdata)
+				if err != nil {
+					break
+				}
+				data = append(data, boxdata...)
+				cues = append(cues, VTTCueBoxContent{Size: int(boxSize), Content: string(boxdata)})
+			} else {
+				fmt.Println("can't process box type: ", string(boxType))
+				// skip
+				r.Seek(int64(boxSize-boxHeaderSize), io.SeekCurrent)
+			}
+		} else {
+			// skip
+			r.Seek(int64(boxSize-boxHeaderSize), io.SeekCurrent)
+		}
+
+		if r.Len() == 0 {
+			break
+		}
+	}
+
+	if err == io.EOF {
+		err = nil
+	}
+
+	return cues, err
+}
+
+func ParseVTTCPayload(data []byte, cueStart int, cueEnd int) (string, error) {
+	var cueID string
+	var cueText string
+	var cueSettings string
+
+	r := bytes.NewReader(data)
+
+	// content
+	payloads, err := mp4.ExtractBox(r, nil, mp4.BoxPath{mp4.StrToBoxType("payl")})
+	if err != nil {
+		return "", err
+	}
+	if len(payloads) < 1 {
+		return "", fmt.Errorf("no vttc payload found")
+	}
+	payload := payloads[0]
+	payload.SeekToPayload(r)
+	payloadData := make([]byte, payload.Size-payload.HeaderSize)
+	r.Read(payloadData)
+	cueText = string(payloadData)
+
+	// ID
+	ids, err := mp4.ExtractBox(r, nil, mp4.BoxPath{mp4.StrToBoxType("iden")})
+	if err == nil && len(ids) > 0 {
+		id := ids[0]
+		id.SeekToPayload(r)
+		idData := make([]byte, id.Size-id.HeaderSize)
+		r.Read(idData)
+		cueID = string(idData)
+	}
+
+	// Settings
+	settings, err := mp4.ExtractBox(r, nil, mp4.BoxPath{mp4.StrToBoxType("sttg")})
+	if err == nil && len(settings) > 0 {
+		setting := settings[0]
+		setting.SeekToPayload(r)
+		settingData := make([]byte, setting.Size-setting.HeaderSize)
+		r.Read(settingData)
+		cueSettings = string(settingData)
+	}
+
+	// rebuild the cue
+	cueString := assembleVTTCue(cueID, cueStart, cueEnd, cueSettings, cueText)
+
+	return cueString, nil
+}
+
+func assembleVTTCue(id string, start int, end int, settings string, text string) string {
+	var cueString string
+	// TODO: process id and settings
+	// if id != "" {
+	// }
+	// if settings != "" {
+	// }
+	cueString += fmt.Sprintf("%s --> %s\n", WebvttTimeString(start), WebvttTimeString(end))
+	cueString += text + "\n\n"
+
+	return cueString
 }

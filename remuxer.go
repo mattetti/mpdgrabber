@@ -195,6 +195,7 @@ func reassembleFile(tempPath string, suffix string, outPath string, nbrSegments 
 	var trackID uint32
 	var trackCues []string
 	var timescale uint32
+	var currentTime int
 
 	for _, fPath := range files {
 
@@ -207,9 +208,11 @@ func reassembleFile(tempPath string, suffix string, outPath string, nbrSegments 
 		// dealing with text files differently
 		// we write the data to the file, removing the mp4 encapsulation
 		if cType == ContentTypeText {
+			if Debug {
+				fmt.Println("--", fPath)
+			}
 			var baseTime int
 			var defaultSampleDuration uint32
-			var currentTime int
 			var trun *mp4.Trun
 
 			// fmt.Println(fPath)
@@ -247,7 +250,9 @@ func reassembleFile(tempPath string, suffix string, outPath string, nbrSegments 
 						language = string(mdhd.Language[:])
 					}
 
-					// fmt.Println(">> Track", trackID, "language:", language, "timescale", timescale)
+					if Debug {
+						fmt.Println(">> Track", trackID, "language:", language, "timescale", timescale)
+					}
 
 					stsds, err := mp4.ExtractBoxWithPayload(in, &h.BoxInfo, mp4.BoxPath{
 						mp4.BoxTypeTrak(),
@@ -308,21 +313,24 @@ func reassembleFile(tempPath string, suffix string, outPath string, nbrSegments 
 				case mp4.BoxTypeMdat():
 					if sawVTT {
 						currentTime = baseTime
-						w := NewByteWriter(int(h.BoxInfo.Size))
-						_, err := io.Copy(w, in)
-						if err != nil {
-							fmt.Println("failed to copy mdata", err)
-						}
-						cues, err := extractAtomWebVTT(w.Buf)
+
+						var sampleIDX int
+						var payloadSize uint32
+						payloadType := make([]byte, 4)
+						const boxHeaderSize = 8
 						for i, presentation := range trun.Entries {
-							if i >= len(cues) {
-								break
-							}
+							// Note: a presentation/sample can have multiple cues.
+							// That's what the presentation Sample Size represents
 							duration := presentation.SampleDuration
 							if duration == 0 {
+								if Debug {
+									fmt.Println("0 duration, backup:", defaultSampleDuration)
+								}
 								duration = defaultSampleDuration
 							}
-							startTime := 0
+
+							// presentation time applies to all cues in the presentation
+							var startTime int
 							tOffset := trun.GetSampleCompositionTimeOffset(i)
 							if tOffset > 0 {
 								startTime = int(baseTime) + int(tOffset)
@@ -336,10 +344,74 @@ func reassembleFile(tempPath string, suffix string, outPath string, nbrSegments 
 								cueStart /= int(timescale)
 								cueEnd /= int(timescale)
 							}
-							trackCues = append(trackCues,
-								fmt.Sprintf("%s --> %s\n%s\n",
-									subs.WebvttTimeString(cueStart),
-									subs.WebvttTimeString(cueEnd), cues[i]))
+
+							totalSize := 0
+							sampleSize := int(presentation.SampleSize)
+							var n int
+							for sampleSize > 8 && totalSize <= sampleSize && sampleIDX < len(trun.Entries) {
+
+								// read the payload size
+								err := binary.Read(in, binary.BigEndian, &payloadSize)
+								_, err = in.Read(payloadType)
+								if err != nil {
+									fmt.Printf("[%d of %d| sample:%d] failed to read box size/type %v - sampleSize: %d, totalSize: %d\n", sampleIDX, len(trun.Entries), n, err, sampleSize, totalSize)
+									return nil, err
+								}
+
+								sampleIDX++
+								n++
+
+								totalSize += int(payloadSize)
+
+								// VTTC
+								if bytes.Equal(payloadType, []byte("vttc")) {
+									// payload = reader.readBytes(payloadSize - 8);
+									payload := make([]byte, int(payloadSize)-boxHeaderSize)
+									err := binary.Read(in, binary.BigEndian, &payload)
+									if err != nil {
+										fmt.Println("failed to read payload", err)
+										break
+									}
+									cue, err := subs.ParseVTTCPayload(payload, cueStart, cueEnd)
+									if Debug {
+										truncatedCue := cue
+										if len(cue) > 50 {
+											truncatedCue = truncatedCue[:45]
+										}
+										fmt.Printf("[%d of %d] sample: %d, %s\n", sampleIDX, len(trun.Entries), n, truncatedCue)
+									}
+									if cue != "" {
+										trackCues = append(trackCues, cue)
+									}
+								} else {
+									// VTTE (empty cue)
+									if Debug {
+										fmt.Printf("[%d of %d] sample: %d, %s box, %s => %s\n", sampleIDX, len(trun.Entries), n, string(payloadType), subs.WebvttTimeString(cueStart), subs.WebvttTimeString(cueEnd))
+									}
+									// skip the rest of the box
+									in.Seek(int64(payloadSize)-int64(boxHeaderSize), io.SeekCurrent)
+								}
+								// else skip the rest
+								// reader.skip(payloadSize - 8);
+								// if duration && payload
+
+								// read the payload
+
+								// if n >= len(cues) {
+								// 	panic(fmt.Sprintf("n: %d <= cues: %d, sampleSize: %d\n", n, len(cues), sampleSize))
+								// 	// SHOULD NOT happen, that means we didn't extract many cues for a given sample/presentation.
+								// 	continue
+								// }
+								// cue := fmt.Sprintf("%s --> %s\n", subs.WebvttTimeString(cueStart),
+								// 	subs.WebvttTimeString(cueEnd))
+								// for sampleSize > 0 {
+								// 	fmt.Println("sampleSize:", sampleSize, "cue size:", cues[n].Size)
+								// 	sampleSize -= cues[n].Size
+								// 	cue += cues[n].Content + "\n"
+								// 	n++
+								// }
+
+							}
 						}
 					}
 				}
@@ -372,69 +444,6 @@ func reassembleFile(tempPath string, suffix string, outPath string, nbrSegments 
 	}
 
 	return nil
-}
-
-func extractAtomWebVTT(buf []byte) ([]string, error) {
-	const boxHeaderSize = uint32(8)
-
-	if len(buf) < 16 {
-		return []string{}, fmt.Errorf("buffer too small")
-	}
-
-	var boxSize uint32
-	var data []byte
-	var cues []string
-	boxType := make([]byte, 4)
-
-	r := bytes.NewReader(buf)
-	var err error
-
-	for err == nil {
-		// Read the box size
-		err := binary.Read(r, binary.BigEndian, &boxSize)
-		_, err = r.Read(boxType)
-		if err != nil {
-			break
-		}
-
-		// if vttc, parse the cue box
-		if bytes.Equal(boxType, []byte("vttc")) {
-			if r.Len() < int(boxHeaderSize) {
-				fmt.Println("vttc box too small")
-				break
-			}
-			err = binary.Read(r, binary.BigEndian, &boxSize)
-			_, err = r.Read(boxType)
-			// if payload is a cue box
-			if bytes.Equal(boxType, []byte("payl")) {
-				size := boxSize - boxHeaderSize
-				boxdata := make([]byte, size)
-				err := binary.Read(r, binary.BigEndian, &boxdata)
-				if err != nil {
-					break
-				}
-				data = append(data, boxdata...)
-				cues = append(cues, string(boxdata))
-			} else {
-				fmt.Println("can't process box type: ", string(boxType))
-				// skip
-				r.Seek(int64(boxSize-boxHeaderSize), io.SeekCurrent)
-			}
-		} else {
-			// skip
-			r.Seek(int64(boxSize-boxHeaderSize), io.SeekCurrent)
-		}
-
-		if r.Len() == 0 {
-			break
-		}
-	}
-
-	if err == io.EOF {
-		err = nil
-	}
-
-	return cues, err
 }
 
 func NewByteWriter(size int) *BytesWriter {

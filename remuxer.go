@@ -330,20 +330,14 @@ func reassembleFile(tempPath string, suffix string, outPath string, nbrSegments 
 							}
 
 							// presentation time applies to all cues in the presentation
-							var startTime int
-							tOffset := trun.GetSampleCompositionTimeOffset(i)
-							if tOffset > 0 {
-								startTime = int(baseTime) + int(tOffset)
-							} else {
-								startTime = currentTime
-							}
-							currentTime = startTime + int(duration)
-							cueStart := startTime
-							cueEnd := currentTime
+							currentTime += int(trun.GetSampleCompositionTimeOffset(i))
+							cueStart := currentTime
+							cueEnd := cueStart + int(duration)
 							if timescale > 0 {
 								cueStart /= int(timescale)
 								cueEnd /= int(timescale)
 							}
+							currentTime += int(duration)
 
 							totalSize := 0
 							sampleSize := int(presentation.SampleSize)
@@ -391,26 +385,6 @@ func reassembleFile(tempPath string, suffix string, outPath string, nbrSegments 
 									// skip the rest of the box
 									in.Seek(int64(payloadSize)-int64(boxHeaderSize), io.SeekCurrent)
 								}
-								// else skip the rest
-								// reader.skip(payloadSize - 8);
-								// if duration && payload
-
-								// read the payload
-
-								// if n >= len(cues) {
-								// 	panic(fmt.Sprintf("n: %d <= cues: %d, sampleSize: %d\n", n, len(cues), sampleSize))
-								// 	// SHOULD NOT happen, that means we didn't extract many cues for a given sample/presentation.
-								// 	continue
-								// }
-								// cue := fmt.Sprintf("%s --> %s\n", subs.WebvttTimeString(cueStart),
-								// 	subs.WebvttTimeString(cueEnd))
-								// for sampleSize > 0 {
-								// 	fmt.Println("sampleSize:", sampleSize, "cue size:", cues[n].Size)
-								// 	sampleSize -= cues[n].Size
-								// 	cue += cues[n].Content + "\n"
-								// 	n++
-								// }
-
 							}
 						}
 					}
@@ -465,83 +439,3 @@ func (bw *BytesWriter) Write(p []byte) (n int, err error) {
 	}
 	return len(bw.Buf), nil
 }
-
-/*
-// TODELETE
-				atoms, err := mp4.ParseAtoms(in)
-				if err != nil {
-					return fmt.Errorf("failed to parse atoms in %s - %w", fPath, err)
-				}
-				for _, atom := range atoms {
-
-					if atom.Type() == mp4.MDAT {
-
-						if TTMLFlag == -1 {
-							// peak atom.Data and check if it starts by "<?xml"
-							// if it does, it's a ttml file
-							// if it doesn't, it's a webvtt file
-							if (len(atom.Data) > 5) && strings.Contains(string(atom.Data[:5]), "<?xml") {
-								// if Debug {
-								// 	fmt.Println("ttml content found")
-								// }
-								TTMLFlag = 1
-								webVTT = 0
-							} else {
-								TTMLFlag = 0
-								// write the atom to the output file
-
-								// check if webvtt
-								// 4 bytes, unsigned be int, 0x00000000
-								// vtt - 0x76 0x74 0x74
-								if (len(atom.Data) > 7) &&
-									(atom.Data[4] == 0x76) &&
-									(atom.Data[5] == 0x74) &&
-									(atom.Data[6] == 0x74) {
-									if Debug {
-										fmt.Println("-> webvtt content found")
-									}
-									webVTT = 1
-								} else {
-									webVTT = 0
-								}
-
-							}
-						}
-
-						// ttml assembling
-						if TTMLFlag == 1 {
-							if ttmlDoc == nil {
-								ttmlDoc, err = ttml.New(atom.Data)
-								if err != nil {
-									Logger.Println("something wrong happened when parsing the ttml data", err)
-								}
-							} else {
-								ttmlDoc.MergeFromData(atom.Data)
-							}
-						} else {
-							// webvtt assembling
-							if webVTT == 1 {
-								// parse the webvtt binary file, convert it to a string, write it to out
-								data, err := extractAtomWebVTT(atom.Data)
-								fmt.Println(string(data))
-								if err != nil {
-									return fmt.Errorf("failed to extract binary webvtt from %s - %w", fPath, err)
-								}
-								// write data to out
-								_, err = out.Write(data)
-								if err != nil {
-									return fmt.Errorf("failed to write data to %s - %w", outPath, err)
-								}
-
-							} else {
-								// just adding things up
-								// fmt.Println("non TTLM subtitles might not work")
-								_, err = atom.Write(out)
-								if err != nil {
-									return fmt.Errorf("failed to write atom to %s - %w", outPath, err)
-								}
-							}
-						}
-					}
-				}
-*/

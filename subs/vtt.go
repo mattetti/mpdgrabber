@@ -353,7 +353,7 @@ func assembleVTTCue(id string, start int, end int, settings string, text string)
 	// if settings != "" {
 	// }
 	cueString += fmt.Sprintf("%s --> %s\n", WebvttTimeString(start), WebvttTimeString(end))
-	cueString += text + "\n\n"
+	cueString += text + "\n"
 
 	return cueString
 }

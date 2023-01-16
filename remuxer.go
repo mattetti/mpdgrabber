@@ -187,10 +187,9 @@ func reassembleFile(tempPath string, suffix string, outPath string, nbrSegments 
 		return a < b
 	})
 
-	TTMLFlag := -1
-	// webVTT := -1
-	var ttmlDoc *subs.TtmlDocument
 	var sawVTT bool
+	var sawSTTP bool
+	var ttmlDoc *subs.TtmlDocument
 	var language string
 	var trackID uint32
 	var trackCues []string
@@ -203,6 +202,8 @@ func reassembleFile(tempPath string, suffix string, outPath string, nbrSegments 
 		if err != nil {
 			return fmt.Errorf("failed to open %s - %w", fPath, err)
 		}
+		// can't dely on defer close here, since we might have too many files opened
+		// we leave it in case of errors tho
 		defer in.Close()
 
 		// dealing with text files differently
@@ -269,9 +270,14 @@ func reassembleFile(tempPath string, suffix string, outPath string, nbrSegments 
 						fmt.Println("no stsd box")
 						return nil, errors.New("stsd box not found")
 					}
-					wvtts, err := mp4.ExtractBox(in, &stsds[0].Info, mp4.BoxPath{mp4.StrToBoxType("wvtt")})
+					wvtts, _ := mp4.ExtractBox(in, &stsds[0].Info, mp4.BoxPath{mp4.StrToBoxType("wvtt")})
 					if len(wvtts) > 0 {
 						sawVTT = true
+					} else {
+						stpps, _ := mp4.ExtractBox(in, &stsds[0].Info, mp4.BoxPath{mp4.StrToBoxType("stpp")})
+						if len(stpps) > 0 {
+							sawSTTP = true
+						}
 					}
 
 				case mp4.BoxTypeMoof():
@@ -311,6 +317,8 @@ func reassembleFile(tempPath string, suffix string, outPath string, nbrSegments 
 					}
 
 				case mp4.BoxTypeMdat():
+
+					// WEbVTT mdat box
 					if sawVTT {
 						currentTime = baseTime
 
@@ -388,6 +396,28 @@ func reassembleFile(tempPath string, suffix string, outPath string, nbrSegments 
 							}
 						}
 					}
+
+					// TTML
+					if sawSTTP {
+						payload := make([]byte, int(h.BoxInfo.Size)-int(h.BoxInfo.HeaderSize))
+						if Debug {
+							fmt.Println("TTML payload size:", len(payload))
+						}
+						err := binary.Read(in, binary.BigEndian, &payload)
+						if err != nil {
+							fmt.Println("failed to read payload", err)
+							break
+						}
+						if ttmlDoc == nil {
+							ttmlDoc, err = subs.NewTtml(payload)
+							if err != nil {
+								Logger.Println("something wrong happened when parsing the ttml data", err)
+							}
+						} else {
+							ttmlDoc.MergeFromData(payload)
+						}
+					}
+
 				}
 				return nil, nil
 			})
@@ -400,18 +430,19 @@ func reassembleFile(tempPath string, suffix string, outPath string, nbrSegments 
 			}
 		}
 
+		in.Close()
 		err = os.Remove(fPath)
 		if err != nil {
 			return fmt.Errorf("failed to remove %s - %w", fPath, err)
 		}
-
 	}
+
 	if sawVTT {
 		fmt.Fprintf(out, "WEBVTT - mpdGrabber TrackID: %d - Language: %s\n\n", trackID, language)
 		for _, cue := range trackCues {
 			fmt.Fprintln(out, cue)
 		}
-	} else if TTMLFlag == 1 && ttmlDoc != nil {
+	} else if sawSTTP && ttmlDoc != nil {
 		if err = ttmlDoc.Write(out); err != nil {
 			return fmt.Errorf("failed to write ttmlDoc to %s - %w", outPath, err)
 		}

@@ -202,7 +202,7 @@ func reassembleFile(tempPath string, suffix string, outPath string, nbrSegments 
 		if err != nil {
 			return fmt.Errorf("failed to open %s - %w", fPath, err)
 		}
-		// can't dely on defer close here, since we might have too many files opened
+		// can't rely on defer close here, since we might have too many files opened
 		// we leave it in case of errors tho
 		defer in.Close()
 

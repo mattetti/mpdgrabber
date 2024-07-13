@@ -515,7 +515,7 @@ func (w *Worker) downloadSegment(job *WJob) {
 
 	audioF, err := downloadFile(job.URL, job.AbsolutePath)
 	if err != nil {
-		Logger.Printf("Failed to download the %s segment file\n", job.Type)
+		Logger.Printf("Failed to download the %s segment file - url: %s\n", job.Type, job.URL)
 		Logger.Println(err)
 	}
 	if Debug {
